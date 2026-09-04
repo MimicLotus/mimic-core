@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 
 use graft::GraftEngine;
-use hunt::{DebHunter, GitHunter, MirrorResolver};
+use hunt::{DebHunter, GitHunter, Hunter, MirrorResolver};
 use state::{AbilityRecord, StateLedger};
 
 #[derive(Parser)]
@@ -28,6 +28,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// 📡 Scout and query upstream hunting grounds for prey (Debian, Arch, AUR)
+    #[command(alias = "search", alias = "find", alias = "scout")]
+    Hunt {
+        /// Target package or keyword to search for
+        query: String,
+        /// Limit hunt to specific ecosystem (e.g. 'deb', 'aur', 'arch')
+        #[arg(short, long)]
+        ecosystem: Option<String>,
+    },
     /// 🥩 Hunt, break, mutate, and assimilate a package or repository into the host
     #[command(alias = "absorb")]
     Consume {
@@ -55,6 +64,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Hunt { query, ecosystem } => {
+            hunt_prey(&query, ecosystem.as_deref()).await?;
+        }
         Commands::Consume { target, source } => {
             consume_prey(&target, source.as_deref()).await?;
         }
@@ -68,6 +80,50 @@ async fn main() -> Result<()> {
             level_up_abilities().await?;
         }
     }
+
+    Ok(())
+}
+
+async fn hunt_prey(query: &str, filter: Option<&str>) -> Result<()> {
+    println!("\n{} {}", "🦖 MIMIC SCOUT RADAR".bold().green(), "v3.0.0".dimmed());
+    println!("{} Scouting upstream hunting grounds for '{}'...\n", "::".magenta().bold(), query.bold().cyan());
+
+    let hunter = Hunter::new();
+    let results = hunter.hunt_all(query, filter).await;
+
+    if results.is_empty() {
+        println!("  {}", format!("No prey found matching '{}'.", query).yellow());
+        return Ok(());
+    }
+
+    println!(
+        "  {:<8} {:<30} {:<18} {}",
+        "ORIGIN".bold().dimmed(),
+        "PACKAGE".bold().white(),
+        "VERSION".bold().dimmed(),
+        "ASSIMILATION COMMAND".bold().green()
+    );
+    println!("  {}", "─".repeat(88).dimmed());
+
+    for r in results {
+        let origin_badge = match r.origin.as_str() {
+            "deb" => "deb".bold().red(),
+            "aur" => "aur".bold().magenta(),
+            "arch" => "arch".bold().cyan(),
+            other => other.bold().white(),
+        };
+
+        let action = format!("mimic consume {}:{}", r.origin, r.package).green();
+
+        println!(
+            "  {:<8} {:<30} {:<18} {}",
+            origin_badge,
+            r.package.bold().white(),
+            r.version.dimmed(),
+            action
+        );
+    }
+    println!();
 
     Ok(())
 }
