@@ -198,6 +198,27 @@ impl SonameScanner {
 
         Ok(missing_sonames)
     }
+
+    pub fn compute_sha256(path: &Path) -> Result<String> {
+        use sha2::{Sha256, Digest};
+        use std::io::Read;
+
+        let mut file = File::open(path)
+            .with_context(|| format!("Failed to open file for hashing at {:?}", path))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 65536];
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+
+        let hash = hasher.finalize();
+        Ok(format!("{:x}", hash))
+    }
 }
 
 fn collect_elf_and_so_recursive(

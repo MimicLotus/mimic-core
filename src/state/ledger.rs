@@ -53,6 +53,21 @@ impl StateLedger {
                 owner_ability_id TEXT NOT NULL,
                 ref_count INTEGER NOT NULL DEFAULT 1
             );
+
+            CREATE TABLE IF NOT EXISTS organ_store (
+                sha256 TEXT PRIMARY KEY,
+                soname TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                ref_count INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS ability_organs (
+                ability_id TEXT NOT NULL,
+                organ_sha256 TEXT NOT NULL,
+                PRIMARY KEY (ability_id, organ_sha256)
+            );
             "#,
         )?;
 
@@ -119,6 +134,89 @@ impl StateLedger {
         Ok(())
     }
 
+    pub fn register_organ(
+        &mut self,
+        ability_id: &str,
+        soname: &str,
+        stored_path: &Path,
+        sha256: &str,
+        size_bytes: u64,
+    ) -> Result<bool> {
+        let path_str = stored_path.to_string_lossy().to_string();
+        let now = chrono_like_now();
+
+        let tx = self.conn.transaction()?;
+
+        let mut is_new = false;
+        let existing_count: Option<i64> = tx
+            .query_row(
+                "SELECT ref_count FROM organ_store WHERE sha256 = ?1",
+                params![sha256],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(_) = existing_count {
+            tx.execute(
+                "UPDATE organ_store SET ref_count = ref_count + 1 WHERE sha256 = ?1",
+                params![sha256],
+            )?;
+        } else {
+            is_new = true;
+            tx.execute(
+                r#"
+                INSERT INTO organ_store (sha256, soname, stored_path, size_bytes, created_at, ref_count)
+                VALUES (?1, ?2, ?3, ?4, ?5, 1)
+                "#,
+                params![sha256, soname, path_str, size_bytes as i64, now],
+            )?;
+        }
+
+        tx.execute(
+            r#"
+            INSERT OR IGNORE INTO ability_organs (ability_id, organ_sha256)
+            VALUES (?1, ?2)
+            "#,
+            params![ability_id, sha256],
+        )?;
+
+        tx.commit()?;
+        Ok(is_new)
+    }
+
+    pub fn find_organ_by_soname(&self, soname: &str) -> Result<Option<(String, PathBuf)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sha256, stored_path FROM organ_store WHERE soname = ?1 ORDER BY ref_count DESC LIMIT 1"
+        )?;
+
+        let mut rows = stmt.query(params![soname])?;
+        if let Some(row) = rows.next()? {
+            let sha: String = row.get(0)?;
+            let p_str: String = row.get(1)?;
+            let p = PathBuf::from(p_str);
+            if p.exists() {
+                return Ok(Some((sha, p)));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn find_organ_by_hash(&self, sha256: &str) -> Result<Option<PathBuf>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT stored_path FROM organ_store WHERE sha256 = ?1 LIMIT 1"
+        )?;
+
+        let mut rows = stmt.query(params![sha256])?;
+        if let Some(row) = rows.next()? {
+            let p_str: String = row.get(0)?;
+            let p = PathBuf::from(p_str);
+            if p.exists() {
+                return Ok(Some(p));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn remove_ability(&mut self, id: &str) -> Result<Vec<String>> {
         let tx = self.conn.transaction()?;
 
@@ -164,6 +262,36 @@ impl StateLedger {
                 }
             }
 
+            // Clean up linked organs in organ_store
+            let organ_hashes: Vec<String> = {
+                let mut stmt = tx.prepare("SELECT organ_sha256 FROM ability_organs WHERE ability_id = ?1")?;
+                let rows = stmt.query_map(params![id], |row| row.get(0))?;
+                rows.flatten().collect()
+            };
+
+            for sha in organ_hashes {
+                let organ_info: Option<(String, i64)> = tx
+                    .query_row(
+                        "SELECT stored_path, ref_count FROM organ_store WHERE sha256 = ?1",
+                        params![sha],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok();
+
+                if let Some((stored_path, ref_count)) = organ_info {
+                    if ref_count <= 1 {
+                        tx.execute("DELETE FROM organ_store WHERE sha256 = ?1", params![sha])?;
+                        files_to_delete.push(stored_path);
+                    } else {
+                        tx.execute(
+                            "UPDATE organ_store SET ref_count = ref_count - 1 WHERE sha256 = ?1",
+                            params![sha],
+                        )?;
+                    }
+                }
+            }
+
+            tx.execute("DELETE FROM ability_organs WHERE ability_id = ?1", params![id])?;
             tx.execute("DELETE FROM abilities WHERE id = ?1", params![id])?;
         }
 
@@ -200,6 +328,36 @@ impl StateLedger {
         }
         Ok(results)
     }
+
+    pub fn list_shared_organs(&self) -> Result<Vec<(String, String, String, i64, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sha256, soname, stored_path, ref_count, size_bytes FROM organ_store ORDER BY ref_count DESC, soname ASC"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get::<_, i64>(4)? as u64,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            results.push(r?);
+        }
+        Ok(results)
+    }
+}
+
+fn chrono_like_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}", now)
 }
 
 fn is_root_or_writable(path: &Path) -> bool {

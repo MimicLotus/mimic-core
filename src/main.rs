@@ -50,6 +50,9 @@ enum Commands {
     /// 📜 List all consumed abilities and assimilated organs
     #[command(alias = "abilities")]
     List,
+    /// 🧬 Inspect deduplicated companion organ bank and reference counts
+    #[command(alias = "bank", alias = "shared")]
+    Organs,
     /// 🩸 Purge and cleanly shed an absorbed ability from the system
     #[command(alias = "shed", alias = "remove")]
     Purge {
@@ -101,6 +104,9 @@ async fn main() -> Result<()> {
         }
         Commands::List => {
             list_abilities()?;
+        }
+        Commands::Organs => {
+            list_organs()?;
         }
         Commands::Purge { id } => {
             purge_ability(&id)?;
@@ -334,6 +340,70 @@ async fn level_up_abilities() -> Result<()> {
     println!("\n{} Scanning {} absorbed abilities for upstream evolution...", "::".magenta().bold(), abilities.len());
     println!("{} All abilities currently at apex evolution.", "✔".green().bold());
     Ok(())
+}
+
+fn list_organs() -> Result<()> {
+    let ledger = StateLedger::open()?;
+    let organs = ledger.list_shared_organs()?;
+
+    println!("\n{} {}", "🦖 MIMIC DEDUPLICATED ORGAN BANK".bold().green(), format!("({} shared organs)", organs.len()).dimmed());
+    println!("  Storage Pool: {}\n", GraftEngine::get_mimic_root().join("lib/shared").display().to_string().dimmed());
+
+    if organs.is_empty() {
+        println!("  {}", "No shared organs stored yet. Ingest packages with 'mimic consume <target>' to populate organ bank.".yellow());
+        return Ok(());
+    }
+
+    println!(
+        "  {:<36} {:<8} {:<12} {}",
+        "ORGAN (SONAME)".bold().white(),
+        "REFS".bold().cyan(),
+        "SIZE".bold().dimmed(),
+        "SHA-256 FINGERPRINT".bold().magenta()
+    );
+    println!("  {}", "─".repeat(92).dimmed());
+
+    let mut total_bytes: u64 = 0;
+    let mut total_saved_bytes: u64 = 0;
+
+    for (sha, soname, _stored_path, ref_count, size_bytes) in organs {
+        total_bytes += size_bytes;
+        if ref_count > 1 {
+            total_saved_bytes += size_bytes * (ref_count - 1) as u64;
+        }
+
+        let size_str = format_bytes(size_bytes);
+        let short_sha = if sha.len() >= 16 { &sha[..16] } else { &sha };
+
+        println!(
+            "  {:<36} {:<8} {:<12} {}",
+            soname.bold().green(),
+            format!("{}x", ref_count).cyan(),
+            size_str.dimmed(),
+            short_sha.magenta()
+        );
+    }
+
+    println!("\n  • Total Unique Organ Tissue: {}", format_bytes(total_bytes).bold().cyan());
+    if total_saved_bytes > 0 {
+        println!("  • Deduplicated Storage Reclaimed: {}\n", format_bytes(total_saved_bytes).bold().green());
+    } else {
+        println!("  • Deduplicated Storage Reclaimed: {}\n", "0 B (Ready for cross-package organ reuse)".dimmed());
+    }
+
+    Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.2} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.2} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn chrono_like_now() -> String {

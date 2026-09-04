@@ -55,23 +55,54 @@ impl GraftEngine {
         let mut all_files = Vec::new();
         collect_files_recursive(raw_dir, &mut all_files)?;
 
-        // 1. Scavenge all companion shared libraries (.so) and set 0o755
+        let shared_lib_dir = mimic_root.join("lib").join("shared");
+        fs::create_dir_all(&shared_lib_dir)?;
+
+        let mut ledger = crate::state::StateLedger::open().ok();
+
+        // 1. Scavenge all companion shared libraries (.so), deduplicate via SHA-256 into shared store, and hardlink
         for src_path in &all_files {
             let file_name = src_path.file_name().unwrap_or_default().to_string_lossy();
             if file_name.contains(".so") {
-                let dest = companion_dir.join(&*file_name);
-                let _ = fs::copy(src_path, &dest);
+                let shared_dest = shared_lib_dir.join(&*file_name);
+                let private_dest = companion_dir.join(&*file_name);
 
-                if let Ok(mut perms) = fs::metadata(&dest).map(|m| m.permissions()) {
-                    perms.set_mode(0o755);
-                    let _ = fs::set_permissions(&dest, perms);
+                let sha256 = SonameScanner::compute_sha256(src_path).unwrap_or_default();
+                let file_size = fs::metadata(src_path).map(|m| m.len()).unwrap_or(0);
+
+                let mut is_deduped = false;
+
+                // Check if identical shared organ exists in shared_lib_dir
+                if shared_dest.exists() {
+                    if let Ok(existing_sha) = SonameScanner::compute_sha256(&shared_dest) {
+                        if existing_sha == sha256 {
+                            is_deduped = true;
+                        }
+                    }
                 }
 
-                if SonameScanner::is_elf(&dest) {
-                    let _ = ElfMutator::mutate_library(&dest, package_id);
+                if !is_deduped {
+                    let _ = fs::copy(src_path, &shared_dest);
+                    if let Ok(mut perms) = fs::metadata(&shared_dest).map(|m| m.permissions()) {
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(&shared_dest, perms);
+                    }
+                    if SonameScanner::is_elf(&shared_dest) {
+                        let _ = ElfMutator::mutate_library(&shared_dest, package_id);
+                    }
                 }
 
-                companion_libs.push(dest.to_string_lossy().to_string());
+                // Hardlink into private package companion pocket
+                let _ = fs::remove_file(&private_dest);
+                if fs::hard_link(&shared_dest, &private_dest).is_err() {
+                    let _ = fs::copy(&shared_dest, &private_dest);
+                }
+
+                if let Some(ref mut l) = ledger {
+                    let _ = l.register_organ(package_id, &file_name, &shared_dest, &sha256, file_size);
+                }
+
+                companion_libs.push(private_dest.to_string_lossy().to_string());
             }
         }
 
@@ -211,14 +242,18 @@ impl GraftEngine {
         mimic_root: &Path,
     ) -> Result<()> {
         let lib_root = mimic_root.join("lib");
+        let shared_lib = lib_root.join("shared");
         let share_root = mimic_root.join("share");
 
         // Collect all companion pockets under /mimic/lib/
         let mut companion_paths = Vec::new();
+        if shared_lib.exists() {
+            companion_paths.push(shared_lib.to_string_lossy().to_string());
+        }
         if let Ok(entries) = fs::read_dir(&lib_root) {
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.is_dir() {
+                if p.is_dir() && p != shared_lib {
                     companion_paths.push(p.to_string_lossy().to_string());
                 }
             }

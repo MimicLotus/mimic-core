@@ -25,12 +25,12 @@ impl ElfMutator {
         // 1. Construct the RPATH
         // Priority:
         //  1. $ORIGIN/../lib/<package_id> (Companion Pocket)
-        //  2. $ORIGIN/lib (Nested libs)
-        //  3. /mimic/lib (Global absorbed organs)
-        //  4. /usr/lib (Host base fallback)
-        //  5. /usr/lib64
+        //  2. $ORIGIN/../lib/shared (Shared Organ Pool)
+        //  3. $ORIGIN/lib (Nested libs)
+        //  4. /mimic/lib/shared & /mimic/lib (Global absorbed organs)
+        //  5. /usr/lib & /usr/lib64 (Host base fallback)
         let new_rpath = format!(
-            "$ORIGIN/../lib/{}:$ORIGIN/lib:/mimic/lib:/usr/lib:/usr/lib64",
+            "$ORIGIN/../lib/{}:$ORIGIN/../lib/shared:$ORIGIN/lib:/mimic/lib/shared:/mimic/lib:/usr/lib:/usr/lib64",
             package_id
         );
 
@@ -79,7 +79,7 @@ impl ElfMutator {
         }
 
         let new_rpath = format!(
-            "$ORIGIN:$ORIGIN/../{}:/mimic/lib:/usr/lib:/usr/lib64",
+            "$ORIGIN:$ORIGIN/../shared:$ORIGIN/../{}:/mimic/lib/shared:/mimic/lib:/usr/lib:/usr/lib64",
             package_id
         );
 

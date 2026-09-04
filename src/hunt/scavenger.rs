@@ -66,8 +66,44 @@ impl OrganScavenger {
             );
 
             let mut packages_to_fetch = Vec::new();
+            let shared_lib_dir = mimic_root.join("lib").join("shared");
+            let ledger = crate::state::StateLedger::open().ok();
 
             for soname in &missing_sonames {
+                // Priority 0: Check if organ is already in local shared organ store
+                let shared_organ = shared_lib_dir.join(soname);
+                if shared_organ.exists() {
+                    println!(
+                        "  • {} Reusing pre-digested organ from shared store: '{}'",
+                        "⚡".yellow().bold(),
+                        soname.bold().cyan()
+                    );
+                    let dest = raw_extract_dir.join(soname);
+                    let _ = std::fs::remove_file(&dest);
+                    if std::fs::hard_link(&shared_organ, &dest).is_err() {
+                        let _ = std::fs::copy(&shared_organ, &dest);
+                    }
+                    continue;
+                }
+
+                if let Some(ref l) = ledger {
+                    if let Ok(Some((_sha, stored_path))) = l.find_organ_by_soname(soname) {
+                        if stored_path.exists() {
+                            println!(
+                                "  • {} Reusing pre-digested organ from state ledger: '{}'",
+                                "⚡".yellow().bold(),
+                                soname.bold().cyan()
+                            );
+                            let dest = raw_extract_dir.join(soname);
+                            let _ = std::fs::remove_file(&dest);
+                            if std::fs::hard_link(&stored_path, &dest).is_err() {
+                                let _ = std::fs::copy(&stored_path, &dest);
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 let mut resolved_pkg = None;
 
                 // Priority 1: Match against current Depends candidate pool
