@@ -34,17 +34,18 @@ enum Commands {
         /// Target package or keyword to search for
         query: String,
         /// Limit hunt to specific ecosystem (e.g. 'deb', 'aur', 'arch')
-        #[arg(short, long)]
+        #[arg(short = 'e', long = "ecosystem", alias = "source", short_alias = 's')]
         ecosystem: Option<String>,
     },
-    /// 🥩 Hunt, break, mutate, and assimilate a package or repository into the host
+    /// 🥩 Hunt, break, mutate, and assimilate packages into the host
     #[command(alias = "absorb")]
     Consume {
-        /// Target prey (e.g. deb:vlc, deb:./pkg.deb, git:BurntSushi/ripgrep, or direct name)
-        target: String,
-        /// Explicit source type override (deb, git, aur, rpm)
-        #[arg(short, long)]
-        source: Option<String>,
+        /// Target prey (e.g. deb:vlc, mpv, deb:./pkg.deb, git:BurntSushi/ripgrep)
+        #[arg(required = true)]
+        targets: Vec<String>,
+        /// Explicit ecosystem override (e.g. -e deb, -s deb, --ecosystem deb)
+        #[arg(short = 'e', long = "ecosystem", alias = "source", short_alias = 's')]
+        ecosystem: Option<String>,
     },
     /// 📜 List all consumed abilities and assimilated organs
     #[command(alias = "abilities")]
@@ -61,14 +62,42 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Normalize command line arguments (handle case-insensitive prefixes and detached colons)
+    let raw_args: Vec<String> = std::env::args().collect();
+    let mut normalized_args = Vec::new();
+
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
+        let lower = arg.to_lowercase();
+
+        // Handle detached prefix e.g. "Deb:" "mpv" -> "deb:mpv"
+        if (lower == "deb:" || lower == "git:" || lower == "aur:" || lower == "rpm:" || lower == "arch:") && i + 1 < raw_args.len() {
+            let next_arg = &raw_args[i + 1];
+            normalized_args.push(format!("{}{}", lower, next_arg));
+            i += 2;
+            continue;
+        }
+
+        // Normalize case for prefixes e.g. "Deb:mpv" -> "deb:mpv"
+        if lower.starts_with("deb:") || lower.starts_with("git:") || lower.starts_with("aur:") || lower.starts_with("rpm:") || lower.starts_with("arch:") {
+            normalized_args.push(lower);
+        } else {
+            normalized_args.push(arg.clone());
+        }
+        i += 1;
+    }
+
+    let cli = Cli::parse_from(normalized_args);
 
     match cli.command {
         Commands::Hunt { query, ecosystem } => {
             hunt_prey(&query, ecosystem.as_deref()).await?;
         }
-        Commands::Consume { target, source } => {
-            consume_prey(&target, source.as_deref()).await?;
+        Commands::Consume { targets, ecosystem } => {
+            for target in &targets {
+                consume_prey(target, ecosystem.as_deref()).await?;
+            }
         }
         Commands::List => {
             list_abilities()?;
