@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 
 use graft::GraftEngine;
-use hunt::{DebHunter, GitHunter};
+use hunt::{DebHunter, GitHunter, MirrorResolver};
 use state::{AbilityRecord, StateLedger};
 
 #[derive(Parser)]
@@ -31,7 +31,7 @@ enum Commands {
     /// 🥩 Hunt, break, mutate, and assimilate a package or repository into the host
     #[command(alias = "absorb")]
     Consume {
-        /// Target prey (.deb archive path, git URL, or identifier)
+        /// Target prey (e.g. deb:vlc, deb:./pkg.deb, git:BurntSushi/ripgrep, or direct name)
         target: String,
         /// Explicit source type override (deb, git, aur, rpm)
         #[arg(short, long)]
@@ -88,18 +88,28 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
     let version;
     let source_type;
     let raw_extract_dir;
+    let mut upstream_origin = target.to_string();
 
     if is_deb {
         source_type = "deb".to_string();
-        let deb_path_str = target.trim_start_matches("deb:");
-        let deb_path = Path::new(deb_path_str);
+        let deb_raw = target.trim_start_matches("deb:");
+        let local_path = Path::new(deb_raw);
 
-        if !deb_path.exists() {
-            anyhow::bail!("Target .deb archive not found at: {}", deb_path_str);
+        let deb_path_to_extract: PathBuf;
+
+        if local_path.exists() && local_path.is_file() {
+            deb_path_to_extract = local_path.to_path_buf();
+        } else {
+            // Over-the-wire mirror hunt
+            println!("{} Querying upstream Debian mirrors for '{}'...", "::".cyan().bold(), deb_raw.bold());
+            let resolver = MirrorResolver::new();
+            let remote_url = resolver.resolve_deb(deb_raw).await?;
+            upstream_origin = remote_url.clone();
+            deb_path_to_extract = resolver.fetch_to_file(&remote_url, &forge_dir).await?;
         }
 
         println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
-        let info = DebHunter::extract_deb(deb_path, &forge_dir)?;
+        let info = DebHunter::extract_deb(&deb_path_to_extract, &forge_dir)?;
         pkg_name = info.name;
         version = info.version;
         raw_extract_dir = info.extracted_dir;
@@ -118,8 +128,19 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
         version = ver;
         raw_extract_dir = dest_dir;
     } else {
-        let _ = fs::remove_dir_all(&forge_dir);
-        anyhow::bail!("Unsupported prey format for: '{}'. Specify deb:path or git:url", target);
+        // Default fallback: Try over-the-wire Debian mirror hunt
+        source_type = "deb".to_string();
+        println!("{} Querying upstream mirrors for '{}'...", "::".cyan().bold(), target.bold());
+        let resolver = MirrorResolver::new();
+        let remote_url = resolver.resolve_deb(target).await?;
+        upstream_origin = remote_url.clone();
+        let downloaded = resolver.fetch_to_file(&remote_url, &forge_dir).await?;
+
+        println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
+        let info = DebHunter::extract_deb(&downloaded, &forge_dir)?;
+        pkg_name = info.name;
+        version = info.version;
+        raw_extract_dir = info.extracted_dir;
     }
 
     // 2. Bone-Break & Physical Assimilation (Graft Engine)
@@ -133,7 +154,7 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
         id: pkg_name.clone(),
         name: pkg_name.clone(),
         source_type,
-        upstream_url: target.to_string(),
+        upstream_url: upstream_origin,
         version: version.clone(),
         consumed_at: chrono_like_now(),
         binary_paths: graft_res.binary_paths.clone(),
