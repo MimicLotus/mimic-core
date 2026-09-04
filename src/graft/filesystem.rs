@@ -33,6 +33,7 @@ impl GraftEngine {
     pub fn graft_payload(raw_dir: &Path, package_id: &str) -> Result<GraftResult> {
         let mimic_root = Self::get_mimic_root();
         let bin_dir = mimic_root.join("bin");
+        let real_bin_dir = bin_dir.join(".real");
         let companion_dir = mimic_root.join("lib").join(package_id);
         let share_dir = mimic_root.join("share");
         let opt_dir = mimic_root.join("opt").join(package_id);
@@ -40,6 +41,7 @@ impl GraftEngine {
         let icons_dir = share_dir.join("icons");
 
         fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&real_bin_dir)?;
         fs::create_dir_all(&companion_dir)?;
         fs::create_dir_all(&share_dir)?;
         fs::create_dir_all(&opt_dir)?;
@@ -86,21 +88,21 @@ impl GraftEngine {
                 || (path_str.contains("/usr/share/") && is_executable(src_path));
 
             if is_in_bin && !file_name.contains(".so") && !src_path.is_dir() && !file_name.ends_with(".desktop") && !file_name.ends_with(".png") && !file_name.ends_with(".svg") {
-                let dest_bin = bin_dir.join(&*file_name);
-                let _ = fs::copy(src_path, &dest_bin);
+                let real_dest_bin = real_bin_dir.join(&*file_name);
+                let trampoline_bin = bin_dir.join(&*file_name);
 
-                // Set executable permissions
-                if let Ok(mut perms) = fs::metadata(&dest_bin).map(|m| m.permissions()) {
+                let _ = fs::copy(src_path, &real_dest_bin);
+
+                if let Ok(mut perms) = fs::metadata(&real_dest_bin).map(|m| m.permissions()) {
                     perms.set_mode(0o755);
-                    let _ = fs::set_permissions(&dest_bin, perms);
+                    let _ = fs::set_permissions(&real_dest_bin, perms);
                 }
 
-                if SonameScanner::is_elf(&dest_bin) {
-                    // Mutate ELF headers: point DT_RUNPATH to companion pockets
-                    if let Ok(analysis) = ElfMutator::mutate_binary(&dest_bin, package_id, Some(&companion_dir)) {
+                if SonameScanner::is_elf(&real_dest_bin) {
+                    if let Ok(analysis) = ElfMutator::mutate_binary(&real_dest_bin, package_id, Some(&companion_dir)) {
                         if !analysis.missing_libraries.is_empty() {
                             println!(
-                                "  {} Note: Binary dynamically references {} host libraries: {:?}",
+                                "  {} Note: Binary references {} host libraries: {:?}",
                                 "ℹ️".blue(),
                                 analysis.missing_libraries.len(),
                                 analysis.missing_libraries
@@ -109,15 +111,23 @@ impl GraftEngine {
                     }
                 }
 
-                binary_paths.push(dest_bin.to_string_lossy().to_string());
+                // Generate high-speed environment trampoline
+                Self::create_trampoline(
+                    &trampoline_bin,
+                    &real_dest_bin,
+                    &mimic_root,
+                    package_id,
+                )?;
 
-                // If userland root, also ensure symlink in ~/.local/bin
+                binary_paths.push(trampoline_bin.to_string_lossy().to_string());
+
+                // If userland root, symlink trampoline to ~/.local/bin
                 if let Ok(home) = std::env::var("HOME") {
                     let local_bin = PathBuf::from(home).join(".local/bin");
                     let _ = fs::create_dir_all(&local_bin);
                     let symlink_path = local_bin.join(&*file_name);
                     let _ = fs::remove_file(&symlink_path);
-                    let _ = std::os::unix::fs::symlink(&dest_bin, &symlink_path);
+                    let _ = std::os::unix::fs::symlink(&trampoline_bin, &symlink_path);
                 }
             } else if file_name.ends_with(".desktop") {
                 let dest_desktop = apps_dir.join(&*file_name);
@@ -132,7 +142,6 @@ impl GraftEngine {
                     let _ = fs::copy(&dest_desktop, user_desktop);
                 }
             } else if path_str.contains("/icons/") || path_str.contains("/pixmaps/") {
-                // Export icons to ~/.local/share/icons and ~/.local/share/pixmaps
                 if let Ok(home) = std::env::var("HOME") {
                     let home_path = PathBuf::from(home);
                     if path_str.contains("/pixmaps/") {
@@ -155,6 +164,42 @@ impl GraftEngine {
             companion_libs,
             desktop_files,
         })
+    }
+
+    fn create_trampoline(
+        trampoline_path: &Path,
+        real_bin: &Path,
+        mimic_root: &Path,
+        package_id: &str,
+    ) -> Result<()> {
+        let lib_root = mimic_root.join("lib");
+        let vlc_plugins_qt = lib_root.join("vlc-plugin-qt");
+        let vlc_plugins_base = lib_root.join("vlc-plugin-base");
+        let companion_lib = lib_root.join(package_id);
+        let share_root = mimic_root.join("share");
+
+        let script = format!(
+            r#"#!/bin/sh
+export LD_LIBRARY_PATH="{comp_lib}:{lib_root}:$LD_LIBRARY_PATH"
+export XDG_DATA_DIRS="{share_root}:$XDG_DATA_DIRS"
+export VLC_PLUGIN_PATH="{vlc_qt}:{vlc_base}:{lib_root}:$VLC_PLUGIN_PATH"
+export QT_PLUGIN_PATH="{lib_root}/plugins:$QT_PLUGIN_PATH"
+exec "{real_bin}" "$@"
+"#,
+            comp_lib = companion_lib.display(),
+            lib_root = lib_root.display(),
+            share_root = share_root.display(),
+            vlc_qt = vlc_plugins_qt.display(),
+            vlc_base = vlc_plugins_base.display(),
+            real_bin = real_bin.display(),
+        );
+
+        fs::write(trampoline_path, script)?;
+        let mut perms = fs::metadata(trampoline_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(trampoline_path, perms)?;
+
+        Ok(())
     }
 
     fn patch_and_copy_desktop(src: &Path, dest: &Path, bin_dir: &Path) -> Result<()> {
