@@ -25,3 +25,5 @@ libc = "0.2"
 tempfile = "3.17"
 indicatif = "0.17"
 futures-util = "0.3"
+regex = "1.11"
+

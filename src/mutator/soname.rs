@@ -83,7 +83,7 @@ impl SonameScanner {
 
         // Check availability on host and companion dir
         let mut missing = Vec::new();
-        let host_lib_dirs = ["/usr/lib", "/usr/lib64", "/lib", "/lib64", "/usr/local/lib"];
+        let host_lib_dirs = ["/usr/lib", "/usr/lib64", "/lib", "/lib64", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu"];
         for lib in &needed {
             let mut found = false;
 
@@ -113,5 +113,113 @@ impl SonameScanner {
             interpreter,
             runpath,
         })
+    }
+
+    pub fn get_needed_libraries(binary_path: &Path) -> Result<Vec<String>> {
+        let patchelf_cmd = which::which("patchelf")
+            .unwrap_or_else(|_| std::path::PathBuf::from("/home/voidlotus/.local/bin/patchelf"));
+
+        let mut needed = Vec::new();
+
+        if patchelf_cmd.exists() {
+            if let Ok(output) = Command::new(&patchelf_cmd)
+                .args(["--print-needed", binary_path.to_str().unwrap()])
+                .output()
+            {
+                if output.status.success() {
+                    let out_str = String::from_utf8_lossy(&output.stdout);
+                    for line in out_str.lines() {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            needed.push(trimmed.to_string());
+                        }
+                    }
+                    return Ok(needed);
+                }
+            }
+        }
+
+        Ok(needed)
+    }
+
+    pub fn scan_unresolved_dependencies(
+        raw_extract_dir: &Path,
+        companion_dirs: &[std::path::PathBuf],
+    ) -> Result<std::collections::HashSet<String>> {
+        use std::collections::HashSet;
+
+        let mut available_so_names = HashSet::new();
+        let mut elf_files = Vec::new();
+
+        // 1. Collect all existing .so filenames inside raw_extract_dir
+        collect_elf_and_so_recursive(raw_extract_dir, &mut available_so_names, &mut elf_files);
+
+        // 2. Collect .so filenames from active companion directories
+        for cd in companion_dirs {
+            if cd.exists() {
+                if let Ok(entries) = std::fs::read_dir(cd) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.contains(".so") {
+                                available_so_names.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Scan all ELF files for DT_NEEDED
+        let mut missing_sonames = HashSet::new();
+        let host_lib_dirs = ["/usr/lib", "/usr/lib64", "/lib", "/lib64", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu"];
+
+        for elf in elf_files {
+            if let Ok(needed) = Self::get_needed_libraries(&elf) {
+                for lib in needed {
+                    if available_so_names.contains(&lib) {
+                        continue;
+                    }
+
+                    // Check host directories
+                    let mut found_on_host = false;
+                    for host_dir in &host_lib_dirs {
+                        if Path::new(host_dir).join(&lib).exists() {
+                            found_on_host = true;
+                            break;
+                        }
+                    }
+
+                    if !found_on_host {
+                        missing_sonames.insert(lib);
+                    }
+                }
+            }
+        }
+
+        Ok(missing_sonames)
+    }
+}
+
+fn collect_elf_and_so_recursive(
+    dir: &Path,
+    so_names: &mut std::collections::HashSet<String>,
+    elf_files: &mut Vec<std::path::PathBuf>,
+) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_elf_and_so_recursive(&path, so_names, elf_files);
+            } else if path.is_file() || path.is_symlink() {
+                if let Some(fname) = path.file_name().and_then(|f| f.to_str()) {
+                    if fname.contains(".so") {
+                        so_names.insert(fname.to_string());
+                    }
+                }
+                if SonameScanner::is_elf(&path) {
+                    elf_files.push(path);
+                }
+            }
+        }
     }
 }

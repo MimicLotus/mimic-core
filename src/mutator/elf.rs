@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use anyhow::{Context, Result};
-use colored::*;
 
 use super::soname::{DynamicDependencyAnalysis, SonameScanner};
 
@@ -57,7 +56,6 @@ impl ElfMutator {
             }
         }
 
-        // 3. Ensure executable permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -67,5 +65,37 @@ impl ElfMutator {
         }
 
         Ok(analysis)
+    }
+
+    pub fn mutate_library(
+        lib_path: &Path,
+        package_id: &str,
+    ) -> Result<()> {
+        let patchelf_cmd = which::which("patchelf")
+            .unwrap_or_else(|_| PathBuf::from("/home/voidlotus/.local/bin/patchelf"));
+
+        if !patchelf_cmd.exists() {
+            anyhow::bail!("patchelf binary not found in PATH or ~/.local/bin");
+        }
+
+        let new_rpath = format!(
+            "$ORIGIN:$ORIGIN/../{}:/mimic/lib:/usr/lib:/usr/lib64",
+            package_id
+        );
+
+        let _ = Command::new(&patchelf_cmd)
+            .args(["--set-rpath", &new_rpath, lib_path.to_str().unwrap()])
+            .status();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(lib_path).map(|m| m.permissions()) {
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(lib_path, perms);
+            }
+        }
+
+        Ok(())
     }
 }

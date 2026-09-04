@@ -14,6 +14,7 @@ pub struct DebPackageInfo {
     pub version: String,
     pub architecture: String,
     pub description: String,
+    pub dependencies: Vec<String>,
     pub extracted_dir: PathBuf,
 }
 
@@ -21,6 +22,12 @@ pub struct DebHunter;
 
 impl DebHunter {
     pub fn extract_deb(deb_path: &Path, destination: &Path) -> Result<DebPackageInfo> {
+        let raw_extract_dir = destination.join("raw");
+        std::fs::create_dir_all(&raw_extract_dir)?;
+        Self::extract_deb_into(deb_path, &raw_extract_dir)
+    }
+
+    pub fn extract_deb_into(deb_path: &Path, raw_extract_dir: &Path) -> Result<DebPackageInfo> {
         let file = File::open(deb_path)
             .with_context(|| format!("Failed to open .deb file at {:?}", deb_path))?;
         let mut archive = Archive::new(file);
@@ -29,9 +36,7 @@ impl DebHunter {
         let mut version = String::new();
         let mut architecture = String::new();
         let mut description = String::new();
-
-        let raw_extract_dir = destination.join("raw");
-        std::fs::create_dir_all(&raw_extract_dir)?;
+        let mut dependencies = Vec::new();
 
         while let Some(entry_result) = archive.next_entry() {
             let mut entry = entry_result.with_context(|| "Corrupted .deb ar archive entry")?;
@@ -47,11 +52,12 @@ impl DebHunter {
                     version = info.1;
                     architecture = info.2;
                     description = info.3;
+                    dependencies = info.4;
                 }
             } else if clean_name.starts_with("data.tar") {
                 let mut buffer = Vec::new();
                 entry.read_to_end(&mut buffer)?;
-                Self::extract_data_tar(&buffer, clean_name, &raw_extract_dir)?;
+                Self::extract_data_tar(&buffer, clean_name, raw_extract_dir)?;
             }
         }
 
@@ -68,7 +74,8 @@ impl DebHunter {
             version,
             architecture,
             description,
-            extracted_dir: raw_extract_dir,
+            dependencies,
+            extracted_dir: raw_extract_dir.to_path_buf(),
         })
     }
 
@@ -97,14 +104,15 @@ impl DebHunter {
         Ok(())
     }
 
-    fn parse_control_tar(data: &[u8], filename: &str) -> Result<(String, String, String, String)> {
+    fn parse_control_tar(data: &[u8], filename: &str) -> Result<(String, String, String, String, Vec<String>)> {
         let cursor = std::io::Cursor::new(data);
         let mut pkg_name = String::new();
         let mut version = String::new();
         let mut arch = String::new();
         let mut desc = String::new();
+        let mut deps = Vec::new();
 
-        let unpack_control = |mut tar: TarArchive<Box<dyn Read>>| -> Result<(String, String, String, String)> {
+        let unpack_control = |mut tar: TarArchive<Box<dyn Read>>| -> Result<(String, String, String, String, Vec<String>)> {
             for entry in tar.entries()? {
                 let mut e = entry?;
                 let path = e.path()?;
@@ -121,11 +129,15 @@ impl DebHunter {
                             arch = val.trim().to_string();
                         } else if let Some(val) = line.strip_prefix("Description: ") {
                             desc = val.trim().to_string();
+                        } else if let Some(val) = line.strip_prefix("Depends: ") {
+                            deps.extend(Self::parse_dependency_line(val));
+                        } else if let Some(val) = line.strip_prefix("Pre-Depends: ") {
+                            deps.extend(Self::parse_dependency_line(val));
                         }
                     }
                 }
             }
-            Ok((pkg_name, version, arch, desc))
+            Ok((pkg_name, version, arch, desc, deps))
         };
 
         if filename.ends_with(".xz") {
@@ -141,5 +153,25 @@ impl DebHunter {
             let decoder: Box<dyn Read> = Box::new(cursor);
             unpack_control(TarArchive::new(decoder))
         }
+    }
+
+    fn parse_dependency_line(line: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        for part in line.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            // For alternatives e.g. "libjack-jackd2-0 | libjack-0.125", pick primary
+            let primary = part.split('|').next().unwrap_or("").trim();
+            // Remove version qualifier e.g. "libavcodec62 (>= 7:8.1.2)" -> "libavcodec62"
+            let pkg_tok = primary.split_whitespace().next().unwrap_or("").trim();
+            // Remove arch qualifier e.g. "libasound2:any" -> "libasound2"
+            let clean_pkg = pkg_tok.split(':').next().unwrap_or("").trim();
+            if !clean_pkg.is_empty() {
+                result.push(clean_pkg.to_string());
+            }
+        }
+        result
     }
 }

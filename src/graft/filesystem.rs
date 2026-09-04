@@ -67,6 +67,10 @@ impl GraftEngine {
                     let _ = fs::set_permissions(&dest, perms);
                 }
 
+                if SonameScanner::is_elf(&dest) {
+                    let _ = ElfMutator::mutate_library(&dest, package_id);
+                }
+
                 companion_libs.push(dest.to_string_lossy().to_string());
             }
         }

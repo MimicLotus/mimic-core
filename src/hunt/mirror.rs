@@ -54,6 +54,53 @@ impl MirrorResolver {
         );
     }
 
+    pub async fn resolve_soname_package(&self, soname: &str) -> Result<Option<String>> {
+        let suites = ["sid", "trixie", "bookworm"];
+
+        for suite in &suites {
+            let search_url = format!(
+                "https://packages.debian.org/search?searchon=contents&keywords={}&mode=exactfilename&suite={}&arch=amd64",
+                soname, suite
+            );
+
+            if let Ok(resp) = self.client.get(&search_url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.text().await {
+                        // Look for table entry matching the exact soname and extract package name
+                        if let Some(pkg) = extract_package_from_contents_search(&body, soname, suite) {
+                            return Ok(Some(pkg));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub async fn fetch_to_file_silent(&self, url: &str, dest: &Path) -> Result<PathBuf> {
+        let file_name = url.split('/').last().unwrap_or("organ.deb");
+        let dest_file = dest.join(file_name);
+
+        let resp = self.client.get(url).send().await
+            .with_context(|| format!("Failed to connect to mirror at {}", url))?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Mirror returned HTTP error: {}", resp.status());
+        }
+
+        let mut file = File::create(&dest_file)
+            .with_context(|| format!("Failed to create destination file at {:?}", dest_file))?;
+        let mut stream = resp.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.with_context(|| "Error reading response stream")?;
+            file.write_all(&chunk)?;
+        }
+
+        Ok(dest_file)
+    }
+
     pub async fn fetch_to_file(&self, url: &str, dest: &Path) -> Result<PathBuf> {
         let file_name = url.split('/').last().unwrap_or("prey.deb");
         let dest_file = dest.join(file_name);
@@ -91,6 +138,40 @@ impl MirrorResolver {
         pb.finish_with_message("Download complete");
         Ok(dest_file)
     }
+}
+
+fn extract_package_from_contents_search(html: &str, soname: &str, suite: &str) -> Option<String> {
+    use regex::Regex;
+    // HTML structure: <span class="keyword">libavcodec.so.62</span></td> <td> <a href="/sid/libavcodec62">
+    let pattern_str = format!(
+        r#"class="keyword">{}</span>.*?<a href="/{}/([^"/]+)""#,
+        regex::escape(soname),
+        suite
+    );
+    if let Ok(re) = Regex::new(&pattern_str) {
+        if let Some(caps) = re.captures(html) {
+            if let Some(m) = caps.get(1) {
+                return Some(m.as_str().to_string());
+            }
+        }
+    }
+
+    // Fallback search: any href with /<suite>/<pkg_name> inside a table row containing soname
+    for line in html.lines() {
+        if line.contains(soname) || line.contains(&format!("/{}", suite)) {
+            if let Some(start) = line.find(&format!("/{}", suite)) {
+                let rest = &line[start + suite.len() + 2..];
+                if let Some(end) = rest.find('"') {
+                    let candidate = &rest[..end];
+                    if !candidate.is_empty() && !candidate.contains('/') {
+                        return Some(candidate.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn extract_deb_link(html: &str) -> Option<String> {

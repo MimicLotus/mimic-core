@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 
 use graft::GraftEngine;
-use hunt::{DebHunter, GitHunter, Hunter, MirrorResolver};
+use hunt::{DebHunter, GitHunter, Hunter, MirrorResolver, OrganScavenger};
 use state::{AbilityRecord, StateLedger};
 
 #[derive(Parser)]
@@ -174,6 +174,7 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
     let source_type;
     let raw_extract_dir;
     let mut upstream_origin = target.to_string();
+    let mut initial_deps = Vec::new();
 
     if is_deb {
         source_type = "deb".to_string();
@@ -198,6 +199,7 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
         pkg_name = info.name;
         version = info.version;
         raw_extract_dir = info.extracted_dir;
+        initial_deps = info.dependencies;
 
         println!(
             "  • Extracted: {} (v{}) [{}]",
@@ -226,7 +228,16 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
         pkg_name = info.name;
         version = info.version;
         raw_extract_dir = info.extracted_dir;
+        initial_deps = info.dependencies;
     }
+
+    // 1.5. Autonomous Dependency & Organ Scavenging
+    let _ = OrganScavenger::scavenge_dependencies(
+        &pkg_name,
+        &raw_extract_dir,
+        &initial_deps,
+        &forge_dir,
+    ).await?;
 
     // 2. Bone-Break & Physical Assimilation (Graft Engine)
     println!("{} Phase 2: Mutating ELF headers & grafting organs...", "::".yellow().bold());

@@ -1,2 +1,2 @@
 pub mod filesystem;
-pub use filesystem::{GraftEngine, GraftResult};
+pub use filesystem::GraftEngine;
