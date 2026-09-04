@@ -1,6 +1,7 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::*;
 
 use crate::mutator::soname::SonameScanner;
@@ -34,11 +35,14 @@ impl GraftEngine {
         let bin_dir = mimic_root.join("bin");
         let companion_dir = mimic_root.join("lib").join(package_id);
         let share_dir = mimic_root.join("share");
+        let opt_dir = mimic_root.join("opt").join(package_id);
         let apps_dir = share_dir.join("applications");
         let icons_dir = share_dir.join("icons");
 
         fs::create_dir_all(&bin_dir)?;
         fs::create_dir_all(&companion_dir)?;
+        fs::create_dir_all(&share_dir)?;
+        fs::create_dir_all(&opt_dir)?;
         fs::create_dir_all(&apps_dir)?;
         fs::create_dir_all(&icons_dir)?;
 
@@ -46,38 +50,58 @@ impl GraftEngine {
         let mut companion_libs = Vec::new();
         let mut desktop_files = Vec::new();
 
-        // 1. Traverse raw extracted payload
         let mut all_files = Vec::new();
         collect_files_recursive(raw_dir, &mut all_files)?;
 
-        // First pass: Scavenge companion shared libraries (.so)
+        // 1. Scavenge all companion shared libraries (.so)
         for src_path in &all_files {
             let file_name = src_path.file_name().unwrap_or_default().to_string_lossy();
             if file_name.contains(".so") {
                 let dest = companion_dir.join(&*file_name);
-                fs::copy(src_path, &dest)?;
+                let _ = fs::copy(src_path, &dest);
                 companion_libs.push(dest.to_string_lossy().to_string());
             }
         }
 
-        // Second pass: Find executables & mutate ELF headers
+        // 2. Preserve /opt/<pkg> and /usr/share/<pkg> bundle trees
+        let opt_src = raw_dir.join("opt").join(package_id);
+        if opt_src.exists() && opt_src.is_dir() {
+            copy_dir_all(&opt_src, &opt_dir)?;
+        }
+
+        let share_src = raw_dir.join("usr/share").join(package_id);
+        let dest_pkg_share = share_dir.join(package_id);
+        if share_src.exists() && share_src.is_dir() {
+            copy_dir_all(&share_src, &dest_pkg_share)?;
+        }
+
+        // 3. Process Executables, mutate ELF headers, and graft into bin_dir
         for src_path in &all_files {
             let file_name = src_path.file_name().unwrap_or_default().to_string_lossy();
-            let is_in_bin = src_path.to_string_lossy().contains("/bin/")
-                || src_path.to_string_lossy().contains("/sbin/")
-                || src_path.to_string_lossy().contains("/opt/");
+            let path_str = src_path.to_string_lossy();
 
-            if is_in_bin && !file_name.contains(".so") && !src_path.is_dir() {
+            let is_in_bin = path_str.contains("/bin/")
+                || path_str.contains("/sbin/")
+                || path_str.contains("/opt/")
+                || (path_str.contains("/usr/share/") && is_executable(src_path));
+
+            if is_in_bin && !file_name.contains(".so") && !src_path.is_dir() && !file_name.ends_with(".desktop") && !file_name.ends_with(".png") && !file_name.ends_with(".svg") {
                 let dest_bin = bin_dir.join(&*file_name);
-                fs::copy(src_path, &dest_bin)?;
+                let _ = fs::copy(src_path, &dest_bin);
+
+                // Set executable permissions
+                if let Ok(mut perms) = fs::metadata(&dest_bin).map(|m| m.permissions()) {
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(&dest_bin, perms);
+                }
 
                 if SonameScanner::is_elf(&dest_bin) {
-                    // Mutate the ELF headers: rewrite DT_RUNPATH to companion pockets
+                    // Mutate ELF headers: point DT_RUNPATH to companion pockets
                     if let Ok(analysis) = ElfMutator::mutate_binary(&dest_bin, package_id, Some(&companion_dir)) {
                         if !analysis.missing_libraries.is_empty() {
                             println!(
-                                "  {} Warning: Missing {} unresolved libraries on host: {:?}",
-                                "⚠️".yellow(),
+                                "  {} Note: Binary dynamically references {} host libraries: {:?}",
+                                "ℹ️".blue(),
                                 analysis.missing_libraries.len(),
                                 analysis.missing_libraries
                             );
@@ -100,20 +124,28 @@ impl GraftEngine {
                 Self::patch_and_copy_desktop(src_path, &dest_desktop, &bin_dir)?;
                 desktop_files.push(dest_desktop.to_string_lossy().to_string());
 
-                // Also copy to ~/.local/share/applications for instant Noctalia/DE pickup
+                // Export to ~/.local/share/applications for instant Noctalia pickup
                 if let Ok(home) = std::env::var("HOME") {
                     let user_apps = PathBuf::from(home).join(".local/share/applications");
                     let _ = fs::create_dir_all(&user_apps);
                     let user_desktop = user_apps.join(&*file_name);
                     let _ = fs::copy(&dest_desktop, user_desktop);
                 }
-            } else if src_path.to_string_lossy().contains("/icons/") || src_path.to_string_lossy().contains("/pixmaps/") {
-                if let Some(parent) = src_path.parent() {
-                    let rel_sub = parent.strip_prefix(raw_dir).unwrap_or(parent);
-                    let dest_icon_parent = share_dir.join(rel_sub);
-                    let _ = fs::create_dir_all(&dest_icon_parent);
-                    let dest_icon = dest_icon_parent.join(&*file_name);
-                    let _ = fs::copy(src_path, dest_icon);
+            } else if path_str.contains("/icons/") || path_str.contains("/pixmaps/") {
+                // Export icons to ~/.local/share/icons and ~/.local/share/pixmaps
+                if let Ok(home) = std::env::var("HOME") {
+                    let home_path = PathBuf::from(home);
+                    if path_str.contains("/pixmaps/") {
+                        let user_pixmaps = home_path.join(".local/share/pixmaps");
+                        let _ = fs::create_dir_all(&user_pixmaps);
+                        let _ = fs::copy(src_path, user_pixmaps.join(&*file_name));
+                    }
+
+                    if path_str.contains("/icons/") {
+                        let user_icons = home_path.join(".local/share/icons");
+                        let _ = fs::create_dir_all(&user_icons);
+                        let _ = fs::copy(src_path, user_icons.join(&*file_name));
+                    }
                 }
             }
         }
@@ -163,6 +195,27 @@ fn collect_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn is_executable(path: &Path) -> bool {
+    if let Ok(meta) = fs::metadata(path) {
+        return meta.permissions().mode() & 0o111 != 0;
+    }
+    false
 }
 
 fn is_writable(path: &Path) -> bool {
