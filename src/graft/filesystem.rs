@@ -55,12 +55,18 @@ impl GraftEngine {
         let mut all_files = Vec::new();
         collect_files_recursive(raw_dir, &mut all_files)?;
 
-        // 1. Scavenge all companion shared libraries (.so)
+        // 1. Scavenge all companion shared libraries (.so) and set 0o755
         for src_path in &all_files {
             let file_name = src_path.file_name().unwrap_or_default().to_string_lossy();
             if file_name.contains(".so") {
                 let dest = companion_dir.join(&*file_name);
                 let _ = fs::copy(src_path, &dest);
+
+                if let Ok(mut perms) = fs::metadata(&dest).map(|m| m.permissions()) {
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(&dest, perms);
+                }
+
                 companion_libs.push(dest.to_string_lossy().to_string());
             }
         }
@@ -93,6 +99,14 @@ impl GraftEngine {
 
                 let _ = fs::copy(src_path, &real_dest_bin);
 
+                // If it's a shell script with hardcoded /usr/bin/, patch it
+                if let Ok(content) = fs::read_to_string(&real_dest_bin) {
+                    if content.starts_with("#!") {
+                        let patched = content.replace("/usr/bin/", &format!("{}/", bin_dir.display()));
+                        let _ = fs::write(&real_dest_bin, patched);
+                    }
+                }
+
                 if let Ok(mut perms) = fs::metadata(&real_dest_bin).map(|m| m.permissions()) {
                     perms.set_mode(0o755);
                     let _ = fs::set_permissions(&real_dest_bin, perms);
@@ -116,7 +130,6 @@ impl GraftEngine {
                     &trampoline_bin,
                     &real_dest_bin,
                     &mimic_root,
-                    package_id,
                 )?;
 
                 binary_paths.push(trampoline_bin.to_string_lossy().to_string());
@@ -159,6 +172,9 @@ impl GraftEngine {
             }
         }
 
+        // Re-generate all existing trampolines in bin_dir to encompass newly added companion pockets
+        Self::refresh_all_trampolines(&mimic_root)?;
+
         Ok(GraftResult {
             binary_paths,
             companion_libs,
@@ -166,31 +182,57 @@ impl GraftEngine {
         })
     }
 
+    fn refresh_all_trampolines(mimic_root: &Path) -> Result<()> {
+        let bin_dir = mimic_root.join("bin");
+        let real_bin_dir = bin_dir.join(".real");
+
+        if real_bin_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&real_bin_dir) {
+                for entry in entries.flatten() {
+                    let real_bin = entry.path();
+                    if real_bin.is_file() {
+                        let file_name = real_bin.file_name().unwrap();
+                        let trampoline_bin = bin_dir.join(file_name);
+                        let _ = Self::create_trampoline(&trampoline_bin, &real_bin, mimic_root);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn create_trampoline(
         trampoline_path: &Path,
         real_bin: &Path,
         mimic_root: &Path,
-        package_id: &str,
     ) -> Result<()> {
         let lib_root = mimic_root.join("lib");
-        let vlc_plugins_qt = lib_root.join("vlc-plugin-qt");
-        let vlc_plugins_base = lib_root.join("vlc-plugin-base");
-        let companion_lib = lib_root.join(package_id);
         let share_root = mimic_root.join("share");
+
+        // Collect all companion pockets under /mimic/lib/
+        let mut companion_paths = Vec::new();
+        if let Ok(entries) = fs::read_dir(&lib_root) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    companion_paths.push(p.to_string_lossy().to_string());
+                }
+            }
+        }
+        companion_paths.push(lib_root.to_string_lossy().to_string());
+        let all_libs_str = companion_paths.join(":");
 
         let script = format!(
             r#"#!/bin/sh
-export LD_LIBRARY_PATH="{comp_lib}:{lib_root}:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="{all_libs}:$LD_LIBRARY_PATH"
+export VLC_PLUGIN_PATH="{all_libs}:$VLC_PLUGIN_PATH"
 export XDG_DATA_DIRS="{share_root}:$XDG_DATA_DIRS"
-export VLC_PLUGIN_PATH="{vlc_qt}:{vlc_base}:{lib_root}:$VLC_PLUGIN_PATH"
 export QT_PLUGIN_PATH="{lib_root}/plugins:$QT_PLUGIN_PATH"
 exec "{real_bin}" "$@"
 "#,
-            comp_lib = companion_lib.display(),
-            lib_root = lib_root.display(),
+            all_libs = all_libs_str,
             share_root = share_root.display(),
-            vlc_qt = vlc_plugins_qt.display(),
-            vlc_base = vlc_plugins_base.display(),
+            lib_root = lib_root.display(),
             real_bin = real_bin.display(),
         );
 
