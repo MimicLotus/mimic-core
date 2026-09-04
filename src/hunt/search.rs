@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use colored::*;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
@@ -17,7 +16,8 @@ struct DebianSearchResults {
 
 #[derive(Debug, Deserialize)]
 pub struct DebianSearchItem {
-    pub package: String,
+    #[serde(alias = "name", alias = "package")]
+    pub name: String,
     pub version: Option<String>,
 }
 
@@ -88,7 +88,7 @@ impl Hunter {
             if let Some(exact) = res.exact {
                 results.push(HuntResult {
                     origin: "deb".to_string(),
-                    package: exact.package,
+                    package: exact.name,
                     version: exact.version.unwrap_or_else(|| "sid".to_string()),
                     description: "Debian upstream match".to_string(),
                 });
@@ -97,7 +97,7 @@ impl Hunter {
                 for item in others.into_iter().take(8) {
                     results.push(HuntResult {
                         origin: "deb".to_string(),
-                        package: item.package,
+                        package: item.name,
                         version: item.version.unwrap_or_else(|| "pool".to_string()),
                         description: "Debian pool package".to_string(),
                     });
