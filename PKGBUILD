@@ -1,8 +1,8 @@
-# Maintainer: MimicOS Core Team <dev@mimicos.org>
+# Maintainer: Mimic Lotus <dev@mimicos.org>
 pkgname=mimic
 pkgver=4.0.0
 pkgrel=1
-pkgdesc="🦖 Unified Package Engine, Hermetic Builder & AI Mentor for Arch Linux"
+pkgdesc="👑 Unified Package Engine, Hermetic Builder & AI Mentor for Arch Linux"
 arch=('x86_64' 'x86_64_v3' 'x86_64_v4')
 url="https://github.com/MimicLotus/mimic-core"
 license=('GPL-3.0-or-later')

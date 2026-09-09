@@ -16,7 +16,7 @@ use wiki::ArchWikiAdvisor;
 #[command(
     name = "mimic-brain",
     version = "4.0.0",
-    author = "MimicOS Core Team <dev@mimicos.org>",
+    author = "Mimic Lotus <dev@mimicos.org>",
     about = "🧠 Dormant System Intelligence & Triage Mentor for Mimic"
 )]
 struct Cli {

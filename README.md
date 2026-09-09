@@ -1,22 +1,30 @@
-# 🦖 Mimic
+<p align="center">
+  <img src="assets/mimic-crown.svg" width="130" height="130" alt="MimicOS Crown" />
+</p>
 
-> **A unified package engine, hermetic sandbox builder, and intelligent system companion for Arch Linux.**
+<h1 align="center">👑 Mimic</h1>
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Arch Linux](https://img.shields.io/badge/Arch%20Linux-Package%20Engine-1793d1?logo=archlinux&logoColor=white)](https://archlinux.org)
-[![Rust](https://img.shields.io/badge/Rust-2021%20Edition-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org)
+<p align="center">
+  <b>A unified package engine, hermetic sandbox builder, and intelligent system companion for Arch Linux.</b>
+</p>
+
+<p align="center">
+  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
+  <a href="https://archlinux.org"><img src="https://img.shields.io/badge/Arch%20Linux-Package%20Engine-1793d1?logo=archlinux&logoColor=white" alt="Arch Linux" /></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-2021%20Edition-dea584?logo=rust&logoColor=white" alt="Rust" /></a>
+</p>
 
 ---
 
 ## 📖 The Story Behind Mimic
 
-If you've spent time on Arch Linux, you know the feeling: **`pacman` is fast and reliable**, but it stops at the boundaries of the official repositories. To venture into the AUR or build cutting-edge packages from source, we rely on helpers that run arbitrary build scripts directly on our host systems.
+If you've spent any time on Arch Linux, you know the feeling: **`pacman` is fast and reliable**, but it stops at the boundaries of the official repositories. To venture into the AUR or build cutting-edge packages from source, we usually rely on helpers that run arbitrary build scripts directly on the host.
 
-One wrong move, an unconstrained `make -j$(nproc)`, or an aggressive C++ compile can spawn 14 compiler jobs on a 6-core machine, eat through all available RAM in seconds, exhaust swap, trigger the Linux kernel Out-Of-Memory (OOM) killer, and terminate your active Wayland compositor mid-session. 
+One wrong move, an unconstrained `make -j$(nproc)`, or an aggressive C++ compile can spawn 14 compiler jobs on a 6-core machine, eat through all available RAM in seconds, exhaust swap, trigger the Linux kernel Out-Of-Memory (OOM) killer, and terminate your active Wayland compositor mid-session.
 
-That exact scenario happened to us while building the Umbriel Wayland compositor on a 5.6 GiB Ryzen 5 laptop. The system crashed, the session died, and we decided: **our package manager should protect our machine, not push it over a cliff.**
+That exact scenario happened to me while compiling the Umbriel Wayland compositor on my 5.6 GiB laptop. My system crashed, my desktop session was killed, and I decided: **my package manager should protect my machine, not push it over a cliff.**
 
-We built **Mimic** as a cohesive, deeply integrated package engine that treats your hardware and your stability with respect.
+I am a solo developer building Mimic because I wanted a package engine that treats my hardware and my stability with respect.
 
 ---
 
@@ -65,6 +73,7 @@ We built **Mimic** as a cohesive, deeply integrated package engine that treats y
 
 ```
 mimic-core/
+├── assets/             # MimicOS vector artwork and crown icon
 ├── crates/
 │   ├── mimic-core/     # Primary CLI, ALPM engine, bwrap sandbox builder, MemoryGuard, PSI watcher
 │   └── mimic-brain/    # Decoupled AI diagnostic mentor & socket IPC triage engine
@@ -178,4 +187,4 @@ Software should be reliable, transparent, and respectful of your machine. Mimic 
 
 Contributions, suggestions, and feedback are welcome! Feel free to open an issue or pull request on [GitHub](https://github.com/MimicLotus/mimic-core).
 
-*Crafted with care for Arch Linux by VoidLotus and the Mimic team.*
+*Crafted with care for Arch Linux by Mimic Lotus.*

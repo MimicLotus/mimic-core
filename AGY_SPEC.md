@@ -1,4 +1,4 @@
-# 🦖 MIMIC ARCHITECTURE & AGENT SPECIFICATION (AGY_SPEC.md)
+# 👑 MIMIC ARCHITECTURE & AGENT SPECIFICATION (AGY_SPEC.md)
 
 ## 1. System Vision & Purpose
 Mimic is a unified, next-generation package management and system intelligence engine designed to replace `pacman`, `makepkg`, `paru`, and `devtools` on Arch Linux and Arch-based operating systems.

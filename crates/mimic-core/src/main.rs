@@ -20,8 +20,8 @@ use micro_repo::MicroRepoResolver;
 #[command(
     name = "mimic",
     version = "4.0.0",
-    author = "MimicOS Core Team <dev@mimicos.org>",
-    about = "🦖 Unified Package Engine & System Intelligence for Arch Linux"
+    author = "Mimic Lotus <dev@mimicos.org>",
+    about = "👑 Unified Package Engine & System Intelligence for Arch Linux"
 )]
 struct Cli {
     /// Specify an alternate root directory for package operations (Sandbox Mode)
