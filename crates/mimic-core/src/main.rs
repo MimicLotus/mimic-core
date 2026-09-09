@@ -147,7 +147,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let pacman_conf = PacmanConfig::load_default(cli.root.as_deref(), cli.dbpath.as_deref(), cli.no_cachy)?;
+    let pacman_conf = PacmanConfig::load_default(cli.config.as_deref(), cli.root.as_deref(), cli.dbpath.as_deref(), cli.no_cachy)?;
     let mut engine = AlpmEngine::new(pacman_conf)?;
     let aur_client = AurClient::new();
     let micro_resolver = MicroRepoResolver::new();

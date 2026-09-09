@@ -83,10 +83,10 @@ impl Default for PacmanConfig {
 }
 
 impl PacmanConfig {
-    pub fn load_default(cli_root: Option<&str>, cli_dbpath: Option<&str>, no_cachy: bool) -> Result<Self> {
-        let conf_path = Path::new("/etc/pacman.conf");
+    pub fn load_default(cli_config: Option<&str>, cli_root: Option<&str>, cli_dbpath: Option<&str>, no_cachy: bool) -> Result<Self> {
+        let conf_path = cli_config.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/etc/pacman.conf"));
         let mut config = if conf_path.exists() {
-            Self::parse_file(conf_path)?
+            Self::parse_file(&conf_path)?
         } else {
             Self::default()
         };
