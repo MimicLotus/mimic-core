@@ -49,6 +49,9 @@ impl AlpmEngine {
         let handle = alpm::Alpm::new(root_str, dbpath_str)
             .with_context(|| format!("Failed to initialize ALPM handle (root: {}, dbpath: {})", root_str, dbpath_str))?;
 
+        // Attach high-visibility terminal progress & download callbacks
+        crate::ui::attach_alpm_callbacks(&handle);
+
         let mut engine = Self {
             handle,
             config,

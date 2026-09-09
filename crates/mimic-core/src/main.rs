@@ -4,6 +4,7 @@ mod aur;
 mod builder;
 mod config;
 mod micro_repo;
+pub mod ui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
