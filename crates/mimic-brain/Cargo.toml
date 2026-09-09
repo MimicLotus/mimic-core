@@ -4,6 +4,7 @@ version = "4.0.0"
 edition = "2021"
 authors = ["MimicOS Core Team <dev@mimicos.org>"]
 description = "Decoupled Dormant AI Mentor & Diagnostic Engine for Mimic"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "mimic-brain"

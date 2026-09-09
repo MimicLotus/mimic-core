@@ -4,6 +4,7 @@ version = "4.0.0"
 edition = "2021"
 authors = ["MimicOS Core Team <dev@mimicos.org>"]
 description = "The Unified Package Engine for Arch Linux (ALPM + AUR + bwrap)"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "mimic"
