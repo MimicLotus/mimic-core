@@ -5,7 +5,7 @@
 <h1 align="center">👑 Mimic</h1>
 
 <p align="center">
-  <b>A unified package engine, hermetic sandbox builder, and intelligent system companion for Arch Linux.</b>
+  <b>A drop-in package manager for Arch Linux.</b>
 </p>
 
 <p align="center">
@@ -16,19 +16,9 @@
 
 ---
 
-## 📖 The Story Behind Mimic
-
-If you've spent any time on Arch Linux, you know the feeling: **`pacman` is fast and reliable**, but it stops at the boundaries of the official repositories. To venture into the AUR or build cutting-edge packages from source, we usually rely on helpers that run arbitrary build scripts directly on the host.
-
-One wrong move, an unconstrained `make -j$(nproc)`, or an aggressive C++ compile can spawn 14 compiler jobs on a 6-core machine, eat through all available RAM in seconds, exhaust swap, trigger the Linux kernel Out-Of-Memory (OOM) killer, and terminate your active Wayland compositor mid-session.
-
-That exact scenario happened to me while compiling the Umbriel Wayland compositor on my 5.6 GiB laptop. My system crashed, my desktop session was killed, and I decided: **my package manager should protect my machine, not push it over a cliff.**
-
-I am a solo developer building Mimic because I wanted a package engine that treats my hardware and my stability with respect.
-
----
-
 ## ✨ What Mimic Does
+
+Mimic is a drop-in package manager for Arch Linux that combines official repository management, AUR package building, and direct Git compilation into a single, high-performance toolchain.
 
 ### 🛡️ Hermetic Bubblewrap Container Builds
 - **Zero-Root Build Isolation**: Package compilation happens inside an unprivileged [Bubblewrap (`bwrap`)](https://github.com/containers/bubblewrap) container using `--unshare-user` and security namespaces.
