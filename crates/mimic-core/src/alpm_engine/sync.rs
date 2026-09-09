@@ -42,4 +42,21 @@ impl AlpmEngine {
 
         Ok(())
     }
+
+    /// Return installed packages that do not exist in any registered syncdb
+    pub fn get_foreign_packages(&self) -> Vec<(String, String)> {
+        let local_db = self.handle.localdb();
+        let syncdbs = self.handle.syncdbs();
+        let mut foreign = Vec::new();
+
+        for pkg in local_db.pkgs() {
+            let name = pkg.name();
+            let exists_in_sync = syncdbs.iter().any(|db| db.pkg(name).is_ok());
+            if !exists_in_sync {
+                foreign.push((name.to_string(), pkg.version().to_string()));
+            }
+        }
+        foreign
+    }
 }
+

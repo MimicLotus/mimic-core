@@ -115,12 +115,21 @@ makepkg -si
 
 ## 🚀 Usage Guide
 
-### 1. Synchronize & Upgrade
-Sync official mirrors, enabled micro-repos, and upgrade your system:
+### 1. Synchronize Databases & Perform Upgrades
+Synchronize official mirrors and configured micro-repo databases:
 ```bash
 mimic sync
 # or force refresh:
-mimic sync --refresh
+mimic sync -y
+```
+
+Perform a full system upgrade across official mirrors, micro-repos, and the AUR:
+```bash
+mimic upgrade
+# or use the short flag:
+mimic -u
+# or with force refresh:
+mimic upgrade -y
 ```
 
 ### 2. Search Packages

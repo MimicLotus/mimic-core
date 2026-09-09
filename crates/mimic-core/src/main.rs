@@ -7,7 +7,7 @@ mod micro_repo;
 pub mod ui;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::*;
 
 use advisor_ipc::AdvisorClient;
@@ -17,7 +17,7 @@ use builder::AurBuilder;
 use config::PacmanConfig;
 use micro_repo::MicroRepoResolver;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(
     name = "mimic",
     version = "4.0.0",
@@ -37,6 +37,10 @@ struct Cli {
     #[arg(long = "config", global = true, value_name = "PATH")]
     config: Option<String>,
 
+    /// Short alias to perform a full system upgrade
+    #[arg(short = 'u', long = "upgrade")]
+    upgrade: bool,
+
     /// Disable automatic CachyOS CPU-optimized repository injection
     #[arg(long = "no-cachy", global = true)]
     no_cachy: bool,
@@ -46,17 +50,28 @@ struct Cli {
     micro_repos: Vec<String>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug, PartialEq, Eq)]
 enum Commands {
-    /// 🔄 Synchronize package databases and upgrade system (-Sy / -Syu)
-    #[command(alias = "update", alias = "up", alias = "-Sy", alias = "-Syu")]
+    /// 🔄 Synchronize package databases from mirrors (-Sy)
+    #[command(alias = "-Sy", alias = "-Syy")]
     Sync {
         /// Force refresh all package databases even if up to date (-yy)
         #[arg(short = 'y', long = "refresh")]
         refresh: bool,
+    },
+    /// 🚀 Synchronize databases and perform a full system upgrade (-Syu)
+    #[command(alias = "up", alias = "update", alias = "-Syu", alias = "-Syyu")]
+    Upgrade {
+        /// Force refresh all package databases even if up to date (-yy)
+        #[arg(short = 'y', long = "refresh")]
+        refresh: bool,
+
+        /// Do not prompt for confirmation
+        #[arg(long = "noconfirm")]
+        noconfirm: bool,
     },
     /// 🔍 Search across official mirrors, micro-repos, and AUR (-Ss)
     #[command(alias = "find", alias = "-Ss")]
@@ -152,11 +167,32 @@ async fn main() -> Result<()> {
     let aur_client = AurClient::new();
     let micro_resolver = MicroRepoResolver::new();
 
+    if cli.upgrade {
+        return run_upgrade(
+            &mut engine,
+            &aur_client,
+            &micro_resolver,
+            &cli.micro_repos,
+            false,
+            false,
+        ).await;
+    }
+
     match cli.command {
-        Commands::Sync { refresh } => {
+        Some(Commands::Sync { refresh }) => {
             engine.sync_databases(refresh)?;
         }
-        Commands::Search { query, aur_only } => {
+        Some(Commands::Upgrade { refresh, noconfirm }) => {
+            run_upgrade(
+                &mut engine,
+                &aur_client,
+                &micro_resolver,
+                &cli.micro_repos,
+                refresh,
+                noconfirm,
+            ).await?;
+        }
+        Some(Commands::Search { query, aur_only }) => {
             println!("{} Searching package grounds for '{}'...\n", "::".cyan().bold(), query.bold());
 
             if !aur_only {
@@ -190,7 +226,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Info { package } => {
+        Some(Commands::Info { package }) => {
             // 1. Check localdb & syncdbs first
             if let Some(info) = engine.info(&package) {
                 println!("\n{} Repository     : {}", "::".cyan().bold(), info.repo.bold().yellow());
@@ -256,7 +292,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Install { packages, noconfirm } => {
+        Some(Commands::Install { packages, noconfirm }) => {
             println!("{} Planning installation transaction for {:?}...", "::".cyan().bold(), packages);
             match engine.plan_install(&packages, false) {
                 Ok(plan) => {
@@ -302,7 +338,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Build { package, output, install, noconfirm } => {
+        Some(Commands::Build { package, output, install, noconfirm }) => {
             let builder = AurBuilder::new();
             let out_path = output.as_ref().map(std::path::Path::new);
             let built_packages = match builder.build(&package, out_path).await {
@@ -330,7 +366,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Git { url, branch, noconfirm, no_install } => {
+        Some(Commands::Git { url, branch, noconfirm, no_install }) => {
             let git_runner = builder::GitSourceRunner::new();
             let pkg_artifact = match git_runner.build_from_git(&url, branch.as_deref()) {
                 Ok(path) => path,
@@ -357,7 +393,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Remove { packages, cascade, noconfirm } => {
+        Some(Commands::Remove { packages, cascade, noconfirm }) => {
             println!("{} Planning removal transaction for {:?}...", "::".red().bold(), packages);
             let plan = engine.plan_remove(&packages, cascade)?;
             engine.print_plan(&plan);
@@ -369,7 +405,7 @@ async fn main() -> Result<()> {
                 engine.release_transaction();
             }
         }
-        Commands::Why { package } => {
+        Some(Commands::Why { package }) => {
             println!("{} Consulting dormant advisor for '{}'...\n", "::".magenta().bold(), package.bold());
             let advisor = AdvisorClient::new();
             match advisor.query_why(&package).await {
@@ -382,6 +418,11 @@ async fn main() -> Result<()> {
                     println!("  or 'mimic-brain listen' to activate real-time socket triage.\n");
                 }
             }
+        }
+        None => {
+            let mut cmd = Cli::command();
+            cmd.print_help()?;
+            println!();
         }
     }
 
@@ -412,5 +453,242 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.2} KiB", bytes as f64 / 1024.0)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+async fn run_upgrade(
+    engine: &mut AlpmEngine,
+    aur_client: &AurClient,
+    micro_resolver: &MicroRepoResolver,
+    micro_repos: &[String],
+    refresh: bool,
+    noconfirm: bool,
+) -> Result<()> {
+    // 1. Sync official and configured ALPM databases from mirrors
+    println!("{} Synchronizing ALPM package databases...", "::".cyan().bold());
+    engine.sync_databases(refresh)?;
+
+    // 2. Plan official ALPM sysupgrade
+    println!("\n{} Checking for repository package upgrades...", "::".cyan().bold());
+    let (has_alpm_updates, alpm_plan) = match engine.plan_install(&[], true) {
+        Ok(plan) => {
+            let has_updates = !plan.to_add.is_empty() || !plan.to_remove.is_empty();
+            if !has_updates {
+                engine.release_transaction();
+            }
+            (has_updates, if has_updates { Some(plan) } else { None })
+        }
+        Err(e) => {
+            eprintln!("{} Warning: Could not plan repository upgrade: {}", "⚠️".yellow(), e);
+            (false, None)
+        }
+    };
+
+    // 3. Check micro-repositories if configured
+    let mut micro_updates = Vec::new();
+    if !micro_repos.is_empty() {
+        println!("{} Checking micro-repositories for updates...", "::".cyan().bold());
+        let localdb = engine.handle.localdb();
+        for repo_slug in micro_repos {
+            match micro_resolver.fetch_release_packages(repo_slug).await {
+                Ok(pkgs) => {
+                    for remote_pkg in pkgs {
+                        if let Ok(local_pkg) = localdb.pkg(remote_pkg.name.as_str()) {
+                            if alpm::vercmp(local_pkg.version().as_str(), remote_pkg.version.as_str()) == std::cmp::Ordering::Less {
+                                micro_updates.push((local_pkg.name().to_string(), local_pkg.version().to_string(), remote_pkg));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} Warning: Failed to query micro-repo '{}': {}", "⚠️".yellow(), repo_slug, e);
+                }
+            }
+        }
+    }
+
+    // 4. Check foreign / AUR packages
+    println!("{} Checking AUR for foreign package updates...", "::".cyan().bold());
+    let foreign_pkgs = engine.get_foreign_packages();
+    let mut aur_updates = Vec::new();
+
+    if !foreign_pkgs.is_empty() {
+        let foreign_names: Vec<String> = foreign_pkgs
+            .iter()
+            .filter(|(name, _)| !micro_updates.iter().any(|(m_name, _, _)| m_name == name))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for chunk in foreign_names.chunks(50) {
+            match aur_client.info_multi(chunk).await {
+                Ok(aur_pkgs) => {
+                    for aur_pkg in aur_pkgs {
+                        if let Some((_, local_ver)) = foreign_pkgs.iter().find(|(n, _)| *n == aur_pkg.name) {
+                            if alpm::vercmp(local_ver.as_str(), aur_pkg.version.as_str()) == std::cmp::Ordering::Less {
+                                aur_updates.push((aur_pkg.name.clone(), local_ver.clone(), aur_pkg.version.clone()));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} Warning: Failed to query AUR RPC: {}", "⚠️".yellow(), e);
+                }
+            }
+        }
+    }
+
+    let has_micro_updates = !micro_updates.is_empty();
+    let has_aur_updates = !aur_updates.is_empty();
+
+    // If nothing to upgrade across all sources
+    if !has_alpm_updates && !has_micro_updates && !has_aur_updates {
+        println!("\n{} there is nothing to do (system is up to date)", "::".green().bold());
+        return Ok(());
+    }
+
+    // 5. Present upgrade summary
+    println!("\n{} Upgrade Summary:", "::".cyan().bold());
+
+    if let Some(ref plan) = alpm_plan {
+        engine.print_plan(plan);
+    }
+
+    if has_micro_updates {
+        println!("  {} Micro-Repository Upgrades ({}):", "👑".yellow(), micro_updates.len());
+        for (name, old_ver, remote_pkg) in &micro_updates {
+            println!("    • {} {} -> {}", name.bold().white(), old_ver.dimmed(), remote_pkg.version.green());
+        }
+        println!();
+    }
+
+    if has_aur_updates {
+        println!("  {} AUR Upgrades ({}):", "▲".magenta(), aur_updates.len());
+        for (name, old_ver, new_ver) in &aur_updates {
+            println!("    • {} {} -> {}", name.bold().white(), old_ver.dimmed(), new_ver.green());
+        }
+        println!();
+    }
+
+    // 6. Execute ALPM official repository upgrades
+    if has_alpm_updates {
+        if noconfirm || prompt_confirm("Proceed with repository package upgrade?") {
+            engine.commit_transaction()?;
+        } else {
+            println!("{} Repository upgrade aborted by user.", "::".yellow());
+            engine.release_transaction();
+        }
+    }
+
+    // 7. Execute Micro-Repository upgrades
+    if has_micro_updates {
+        if noconfirm || prompt_confirm("Proceed with micro-repository updates?") {
+            let cache_dir = engine.config.cache_dirs.first().cloned().unwrap_or_else(|| std::path::PathBuf::from("/var/cache/pacman/pkg"));
+            for (_, _, remote_pkg) in &micro_updates {
+                println!("\n{} Fetching micro-repo package '{}'...", "::".cyan().bold(), remote_pkg.name);
+                match micro_resolver.download_package(remote_pkg, &cache_dir).await {
+                    Ok(downloaded_path) => {
+                        let path_str = downloaded_path.to_string_lossy().to_string();
+                        let plan = engine.plan_install(&[path_str], false)?;
+                        engine.print_plan(&plan);
+                        engine.commit_transaction()?;
+                    }
+                    Err(e) => {
+                        eprintln!("{} Failed to download micro-repo package '{}': {}", "✖".red().bold(), remote_pkg.name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 8. Execute AUR upgrades
+    if has_aur_updates {
+        if noconfirm || prompt_confirm("Build and install AUR upgrades in hermetic sandbox?") {
+            let builder = AurBuilder::new();
+            for (pkg_name, _, _) in &aur_updates {
+                println!("\n{} Building AUR update for '{}'...", "::".cyan().bold(), pkg_name);
+                match builder.build(pkg_name, None).await {
+                    Ok(built_pkgs) => {
+                        let pkg_paths: Vec<String> = built_pkgs.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                        let plan = engine.plan_install(&pkg_paths, false)?;
+                        engine.print_plan(&plan);
+                        engine.commit_transaction()?;
+                    }
+                    Err(e) => {
+                        eprintln!("{} Failed to build AUR update for '{}': {}", "✖".red().bold(), pkg_name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\n{} System upgrade complete.", "✔".green().bold());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parse_sync() {
+        let cli = Cli::try_parse_from(["mimic", "sync"]).expect("Failed to parse sync");
+        assert_eq!(cli.command, Some(Commands::Sync { refresh: false }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_sync_refresh() {
+        let cli = Cli::try_parse_from(["mimic", "sync", "-y"]).expect("Failed to parse sync -y");
+        assert_eq!(cli.command, Some(Commands::Sync { refresh: true }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_sync_alias() {
+        let cli = Cli::try_parse_from(["mimic", "-Sy"]).expect("Failed to parse -Sy");
+        assert_eq!(cli.command, Some(Commands::Sync { refresh: false }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_upgrade() {
+        let cli = Cli::try_parse_from(["mimic", "upgrade"]).expect("Failed to parse upgrade");
+        assert_eq!(cli.command, Some(Commands::Upgrade { refresh: false, noconfirm: false }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_upgrade_flags() {
+        let cli = Cli::try_parse_from(["mimic", "upgrade", "-y", "--noconfirm"]).expect("Failed to parse upgrade flags");
+        assert_eq!(cli.command, Some(Commands::Upgrade { refresh: true, noconfirm: true }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_upgrade_alias_syu() {
+        let cli = Cli::try_parse_from(["mimic", "-Syu"]).expect("Failed to parse -Syu");
+        assert_eq!(cli.command, Some(Commands::Upgrade { refresh: false, noconfirm: false }));
+        assert!(!cli.upgrade);
+    }
+
+    #[test]
+    fn test_cli_parse_upgrade_short_flag() {
+        let cli = Cli::try_parse_from(["mimic", "-u"]).expect("Failed to parse -u");
+        assert!(cli.upgrade);
+        assert_eq!(cli.command, None);
+    }
+
+    #[test]
+    fn test_cli_parse_upgrade_long_flag() {
+        let cli = Cli::try_parse_from(["mimic", "--upgrade"]).expect("Failed to parse --upgrade");
+        assert!(cli.upgrade);
+        assert_eq!(cli.command, None);
+    }
+
+    #[test]
+    fn test_cli_parse_root_bare() {
+        let cli = Cli::try_parse_from(["mimic"]).expect("Failed to parse bare mimic");
+        assert!(!cli.upgrade);
+        assert_eq!(cli.command, None);
     }
 }

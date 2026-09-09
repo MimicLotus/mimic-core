@@ -89,6 +89,28 @@ impl MicroRepoResolver {
         }
         None
     }
+
+    /// Download package asset to destination directory
+    pub async fn download_package(&self, pkg: &MicroRepoPackage, dest_dir: &std::path::Path) -> Result<std::path::PathBuf> {
+        let file_name = pkg.download_url.split('/').last().unwrap_or(&pkg.name);
+        let dest_path = dest_dir.join(file_name);
+
+        if !dest_dir.exists() {
+            std::fs::create_dir_all(dest_dir)?;
+        }
+
+        let resp = self.client.get(&pkg.download_url).send().await
+            .with_context(|| format!("Failed to download package from '{}'", pkg.download_url))?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Failed to download '{}': HTTP {}", pkg.download_url, resp.status());
+        }
+
+        let bytes = resp.bytes().await?;
+        std::fs::write(&dest_path, bytes)?;
+
+        Ok(dest_path)
+    }
 }
 
 pub fn parse_pkg_filename(filename: &str) -> Option<(String, String, String)> {
