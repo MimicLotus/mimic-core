@@ -104,4 +104,10 @@ Because `mimic-brain` is isolated behind a domain socket (`/run/mimic/brain.sock
   - **ArchWiki Offline Embeddings**:
     * Bundles a lightweight, quantized vector index or targeted lookup table of common ArchWiki troubleshooting guides.
     * Enables high-fidelity offline assistance during network outages or emergency recovery boots.
+  - **BYOK (Bring Your Own Key) Support & Two-Tier Triage**:
+    * Configurable endpoints for Gemini and Claude for deep compiler triage, patch generation, and natural-language system explanations.
+    * **Tier 1 (Offline / Fast Path)**: Instant local heuristics, compiler error regex, missing header mappings, and ALPM conflict analysis with 0 network calls and 0 cost.
+    * **Tier 2 (Cloud Synthesis Path)**: Streams sanitized compiler logs and build contexts to Gemini/Claude via user keys stored securely in `~/.config/mimic/brain.env` or secret service keyring (`mimic why <pkg>` / `mimic build --deep-triage`).
+    * Maintains strict process isolation: keys live only in the on-demand `mimic-brain` socket daemon, never in the package manager binary.
+
 
