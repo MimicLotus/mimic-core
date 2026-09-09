@@ -1,31 +1,25 @@
-[package]
-name = "mimic"
-version = "3.0.0"
-edition = "2021"
-authors = ["MimicOS Core Team <dev@mimicos.org>"]
-description = "Autonomous Predatory Package Ingestion & Assimilation Engine for MimicOS"
+[workspace]
+resolver = "2"
+members = [
+    "crates/mimic-core",
+    "crates/mimic-brain",
+]
 
-[dependencies]
-clap = { version = "4.5", features = ["derive"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+[workspace.dependencies]
+alpm = "5.0"
+clap = { version = "4.5", features = ["derive", "cargo"] }
 tokio = { version = "1.43", features = ["full"] }
 anyhow = "1.0"
 colored = "3.0"
-object = { version = "0.36", features = ["read", "elf"] }
-ar = "0.9"
-tar = "0.4"
-flate2 = "1.0"
-xz2 = "0.1"
-zstd = "0.13"
-reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-which = "7.0"
-libc = "0.2"
-tempfile = "3.17"
-indicatif = "0.17"
+reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
+indicatif = "0.17"
+tempfile = "3.17"
+which = "7.0"
 regex = "1.11"
 sha2 = "0.10"
-
-
+zstd = "0.13"
+tar = "0.4"
+flate2 = "1.0"

@@ -4,6 +4,7 @@ use anyhow::Result;
 use colored::*;
 
 use crate::graft::GraftEngine;
+use crate::hunt::arch::ArchHunter;
 use crate::hunt::deb::DebHunter;
 use crate::hunt::mirror::MirrorResolver;
 use crate::mutator::soname::SonameScanner;
@@ -13,11 +14,13 @@ pub struct OrganScavenger;
 impl OrganScavenger {
     pub async fn scavenge_dependencies(
         primary_pkg: &str,
+        source_type: &str,
         raw_extract_dir: &Path,
         initial_deps: &[String],
         forge_dir: &Path,
     ) -> Result<Vec<String>> {
-        let resolver = MirrorResolver::new();
+        let deb_resolver = MirrorResolver::new();
+        let arch_hunter = ArchHunter::new();
         let mimic_root = GraftEngine::get_mimic_root();
         let companion_root = mimic_root.join("lib");
 
@@ -42,7 +45,7 @@ impl OrganScavenger {
         let max_iterations = 12;
         let mut iteration = 0;
 
-        println!("{} Phase 1.5: Autonomous Dependency & Organ Scavenging...", "::".cyan().bold());
+        println!("{} Phase 1.5: Autonomous Dependency & Organ Scavenging [{}]...", "::".cyan().bold(), source_type.cyan());
 
         loop {
             iteration += 1;
@@ -106,7 +109,7 @@ impl OrganScavenger {
 
                 let mut resolved_pkg = None;
 
-                // Priority 1: Match against current Depends candidate pool
+                // Priority 1: Match against current candidate pool
                 for cand in &candidate_pool {
                     if !fetched_packages.contains(cand) && soname_matches_package(soname, cand) {
                         resolved_pkg = Some(cand.clone());
@@ -114,11 +117,19 @@ impl OrganScavenger {
                     }
                 }
 
-                // Priority 2: Online Debian Contents Database Lookup
+                // Priority 2: Online Upstream Ecosystem Index Lookup
                 if resolved_pkg.is_none() {
-                    if let Ok(Some(online_pkg)) = resolver.resolve_soname_package(soname).await {
-                        if !fetched_packages.contains(&online_pkg) {
-                            resolved_pkg = Some(online_pkg);
+                    if source_type == "arch" {
+                        if let Ok(Some(online_pkg)) = arch_hunter.resolve_soname_package(soname).await {
+                            if !fetched_packages.contains(&online_pkg) {
+                                resolved_pkg = Some(online_pkg);
+                            }
+                        }
+                    } else {
+                        if let Ok(Some(online_pkg)) = deb_resolver.resolve_soname_package(soname).await {
+                            if !fetched_packages.contains(&online_pkg) {
+                                resolved_pkg = Some(online_pkg);
+                            }
                         }
                     }
                 }
@@ -130,10 +141,10 @@ impl OrganScavenger {
                 }
             }
 
-            // Fallback: If some SONAMEs couldn't be resolved, check if there are remaining lib-* candidates in pool
+            // Fallback: If some SONAMEs couldn't be resolved, check if there are remaining candidate libraries in pool
             if packages_to_fetch.is_empty() {
                 for cand in &candidate_pool {
-                    if !fetched_packages.contains(cand) && cand.starts_with("lib") && !is_known_host_base_pkg(cand) {
+                    if !fetched_packages.contains(cand) && !is_known_host_base_pkg(cand) {
                         packages_to_fetch.push(cand.clone());
                         if packages_to_fetch.len() >= 6 {
                             break;
@@ -158,32 +169,63 @@ impl OrganScavenger {
                 fetched_packages.insert(dep_pkg.clone());
                 println!("  • {} Scavenging companion organ: '{}'...", "🧬".green(), dep_pkg.bold().green());
 
-                match resolver.resolve_deb(&dep_pkg).await {
-                    Ok(dep_url) => {
-                        match resolver.fetch_to_file_silent(&dep_url, forge_dir).await {
-                            Ok(dep_deb_path) => {
-                                match DebHunter::extract_deb_into(&dep_deb_path, raw_extract_dir) {
-                                    Ok(dep_info) => {
-                                        newly_scavenged += 1;
-                                        scavenged_packages.push(dep_pkg);
-                                        for nd in dep_info.dependencies {
-                                            if !candidate_pool.contains(&nd) {
-                                                candidate_pool.push(nd);
+                if source_type == "arch" {
+                    match arch_hunter.resolve_arch_pkg(&dep_pkg).await {
+                        Ok((dep_url, _ver)) => {
+                            match arch_hunter.fetch_to_file_silent(&dep_url, forge_dir).await {
+                                Ok(pkg_path) => {
+                                    match ArchHunter::extract_arch_pkg_into(&pkg_path, raw_extract_dir) {
+                                        Ok(dep_info) => {
+                                            newly_scavenged += 1;
+                                            scavenged_packages.push(dep_pkg);
+                                            for nd in dep_info.dependencies {
+                                                if !candidate_pool.contains(&nd) {
+                                                    candidate_pool.push(nd);
+                                                }
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        println!("    {} Failed to extract organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                        Err(e) => {
+                                            println!("    {} Failed to extract Arch organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                println!("    {} Failed to download organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                Err(e) => {
+                                    println!("    {} Failed to download Arch organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                }
                             }
                         }
+                        Err(e) => {
+                            println!("    {} Upstream Arch mirror resolution failed for {}: {}", "⚠️".yellow(), dep_pkg, e);
+                        }
                     }
-                    Err(e) => {
-                        println!("    {} Upstream mirror resolution failed for {}: {}", "⚠️".yellow(), dep_pkg, e);
+                } else {
+                    match deb_resolver.resolve_deb(&dep_pkg).await {
+                        Ok(dep_url) => {
+                            match deb_resolver.fetch_to_file_silent(&dep_url, forge_dir).await {
+                                Ok(dep_deb_path) => {
+                                    match DebHunter::extract_deb_into(&dep_deb_path, raw_extract_dir) {
+                                        Ok(dep_info) => {
+                                            newly_scavenged += 1;
+                                            scavenged_packages.push(dep_pkg);
+                                            for nd in dep_info.dependencies {
+                                                if !candidate_pool.contains(&nd) {
+                                                    candidate_pool.push(nd);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!("    {} Failed to extract Debian organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("    {} Failed to download Debian organ {}: {}", "⚠️".yellow(), dep_pkg, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            println!("    {} Upstream Debian mirror resolution failed for {}: {}", "⚠️".yellow(), dep_pkg, e);
+                        }
                     }
                 }
             }
@@ -206,22 +248,45 @@ fn soname_matches_package(soname: &str, pkg: &str) -> bool {
     let base_name = parts[0];
     let so_ver = parts.get(1).map(|s| s.trim_start_matches('.')).unwrap_or("");
 
+    // KF6 mapping e.g. "libkf6archive" -> "karchive"
+    if let Some(kf_name) = base_name.strip_prefix("libkf6") {
+        let arch_kf = format!("k{}", kf_name);
+        if pkg_lower == arch_kf || pkg_lower.contains(&arch_kf) {
+            return true;
+        }
+    }
+
+    // Qt6 mapping e.g. "libqt6svg" -> "qt6-svg"
+    if let Some(qt_name) = base_name.strip_prefix("libqt6") {
+        let qt_pkg = format!("qt6-{}", qt_name);
+        if pkg_lower == qt_pkg || pkg_lower.contains(&qt_pkg) {
+            return true;
+        }
+    }
+
     // 1. Exact match e.g. "libavcodec62"
     if pkg_lower == format!("{}{}", base_name, so_ver) {
         return true;
     }
 
-    // 2. Prefix with version e.g. "libcdio19t64"
+    // 2. Direct name match without 'lib' prefix e.g. "libkddockwidgets" -> "kddockwidgets"
+    if let Some(without_lib) = base_name.strip_prefix("lib") {
+        if pkg_lower == without_lib || pkg_lower.starts_with(without_lib) || without_lib.starts_with(&pkg_lower) {
+            return true;
+        }
+    }
+
+    // 3. Prefix with version e.g. "libcdio19t64"
     if !so_ver.is_empty() && pkg_lower.starts_with(&format!("{}{}", base_name, so_ver)) {
         return true;
     }
 
-    // 3. Prefix match with dash or contains e.g. "libjpeg62-turbo", "liblua5.2-0"
+    // 4. Prefix match with dash or contains e.g. "libjpeg62-turbo", "liblua5.2-0"
     if pkg_lower.starts_with(base_name) && (!so_ver.is_empty() && pkg_lower.contains(so_ver)) {
         return true;
     }
 
-    // 4. Dot versions e.g. "libcodec2.so.1.2" vs "libcodec2-1.2"
+    // 5. Dot versions e.g. "libcodec2.so.1.2" vs "libcodec2-1.2"
     if so_ver.contains('.') {
         let dash_ver = so_ver.replace('.', "-");
         if pkg_lower.contains(&dash_ver) || pkg_lower.contains(so_ver) {
@@ -229,7 +294,7 @@ fn soname_matches_package(soname: &str, pkg: &str) -> bool {
         }
     }
 
-    // 5. General prefix match e.g. "libplacebo.so.360" vs "libplacebo360"
+    // 6. General prefix match e.g. "libplacebo.so.360" vs "libplacebo360"
     let clean_so = soname_lower.replace(".so.", "").replace(".so", "");
     if pkg_lower.starts_with(&clean_so) || clean_so.starts_with(&pkg_lower) {
         return true;
@@ -249,6 +314,11 @@ fn is_known_host_base_pkg(pkg: &str) -> bool {
         "base-passwd",
         "dpkg",
         "debconf",
+        "glibc",
+        "gcc-libs",
+        "libstdc++",
+        "filesystem",
+        "systemd-libs",
     ];
     base_pkgs.contains(&pkg)
 }

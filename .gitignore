@@ -1,5 +1,13 @@
-/target
+target/
+*.pkg.tar.*
+*.db*
+*.files*
+/tmp/
+/var/tmp/
+local-repo/
+*.log
+
+pkg/
 **/*.rs.bk
 *.deb
 *.rpm
-*.db

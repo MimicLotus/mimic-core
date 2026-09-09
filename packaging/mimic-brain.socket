@@ -1,0 +1,10 @@
+[Unit]
+Description=Mimic AI Mentor Dormant IPC Socket
+Documentation=https://github.com/mimicos/mimic
+
+[Socket]
+ListenStream=/run/mimic/brain.sock
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target

@@ -63,7 +63,7 @@ impl GraftEngine {
         // 1. Scavenge all companion shared libraries (.so), deduplicate via SHA-256 into shared store, and hardlink
         for src_path in &all_files {
             let file_name = src_path.file_name().unwrap_or_default().to_string_lossy();
-            if file_name.contains(".so") {
+            if file_name.contains(".so") && !is_base_system_library(&file_name) {
                 let shared_dest = shared_lib_dir.join(&*file_name);
                 let private_dest = companion_dir.join(&*file_name);
 
@@ -160,10 +160,11 @@ impl GraftEngine {
                     }
                 }
 
-                // Generate high-speed environment trampoline
+                // Generate high-speed environment trampoline isolated to this package
                 Self::create_trampoline(
                     &trampoline_bin,
                     &real_dest_bin,
+                    package_id,
                     &mimic_root,
                 )?;
 
@@ -207,9 +208,6 @@ impl GraftEngine {
             }
         }
 
-        // Re-generate all existing trampolines in bin_dir to encompass newly added companion pockets
-        Self::refresh_all_trampolines(&mimic_root)?;
-
         Ok(GraftResult {
             binary_paths,
             companion_libs,
@@ -217,46 +215,24 @@ impl GraftEngine {
         })
     }
 
-    fn refresh_all_trampolines(mimic_root: &Path) -> Result<()> {
-        let bin_dir = mimic_root.join("bin");
-        let real_bin_dir = bin_dir.join(".real");
-
-        if real_bin_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&real_bin_dir) {
-                for entry in entries.flatten() {
-                    let real_bin = entry.path();
-                    if real_bin.is_file() {
-                        let file_name = real_bin.file_name().unwrap();
-                        let trampoline_bin = bin_dir.join(file_name);
-                        let _ = Self::create_trampoline(&trampoline_bin, &real_bin, mimic_root);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn create_trampoline(
         trampoline_path: &Path,
         real_bin: &Path,
+        package_id: &str,
         mimic_root: &Path,
     ) -> Result<()> {
         let lib_root = mimic_root.join("lib");
+        let pkg_lib = lib_root.join(package_id);
         let shared_lib = lib_root.join("shared");
         let share_root = mimic_root.join("share");
 
-        // Collect all companion pockets under /mimic/lib/
+        // Target binary only links against its own companion pocket and shared organ bank
         let mut companion_paths = Vec::new();
+        if pkg_lib.exists() {
+            companion_paths.push(pkg_lib.to_string_lossy().to_string());
+        }
         if shared_lib.exists() {
             companion_paths.push(shared_lib.to_string_lossy().to_string());
-        }
-        if let Ok(entries) = fs::read_dir(&lib_root) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() && p != shared_lib {
-                    companion_paths.push(p.to_string_lossy().to_string());
-                }
-            }
         }
         companion_paths.push(lib_root.to_string_lossy().to_string());
         let all_libs_str = companion_paths.join(":");
@@ -264,12 +240,13 @@ impl GraftEngine {
         let script = format!(
             r#"#!/bin/sh
 export LD_LIBRARY_PATH="{all_libs}:$LD_LIBRARY_PATH"
-export VLC_PLUGIN_PATH="{all_libs}:$VLC_PLUGIN_PATH"
+export VLC_PLUGIN_PATH="{pkg_lib}:$VLC_PLUGIN_PATH"
 export XDG_DATA_DIRS="{share_root}:$XDG_DATA_DIRS"
-export QT_PLUGIN_PATH="{lib_root}/plugins:$QT_PLUGIN_PATH"
+export QT_PLUGIN_PATH="{pkg_lib}/plugins:{lib_root}/plugins:$QT_PLUGIN_PATH"
 exec "{real_bin}" "$@"
 "#,
             all_libs = all_libs_str,
+            pkg_lib = pkg_lib.display(),
             share_root = share_root.display(),
             lib_root = lib_root.display(),
             real_bin = real_bin.display(),
@@ -351,4 +328,15 @@ fn is_writable(path: &Path) -> bool {
         }
     }
     false
+}
+
+fn is_base_system_library(file_name: &str) -> bool {
+    file_name.starts_with("libc.so")
+        || file_name.starts_with("ld-linux")
+        || file_name.starts_with("libpthread.so")
+        || file_name.starts_with("libdl.so")
+        || file_name.starts_with("librt.so")
+        || file_name.starts_with("libm.so")
+        || file_name.starts_with("libgcc_s.so")
+        || file_name.starts_with("libstdc++.so")
 }

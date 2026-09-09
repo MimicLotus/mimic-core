@@ -1,0 +1,15 @@
+[Unit]
+Description=Mimic AI Mentor & Diagnostic Engine
+Documentation=https://github.com/mimicos/mimic
+Requires=mimic-brain.socket
+After=network.target mimic-brain.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mimic-brain listen --socket /run/mimic/brain.sock
+Restart=on-failure
+MemoryHigh=128M
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

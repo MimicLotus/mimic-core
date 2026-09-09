@@ -1,0 +1,53 @@
+name: Release Build & Micro-Repo Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize Arch Linux toolchain
+        run: |
+          pacman -Syu --noconfirm rust cargo bubblewrap sccache mold openssl libalpm git sudo
+          useradd -m -G wheel builduser
+          echo "builduser ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builduser:builduser .
+
+      - name: Compile release workspace
+        run: |
+          sudo -u builduser cargo build --release --locked --workspace
+
+      - name: Build Arch Linux package (.pkg.tar.zst)
+        run: |
+          sudo -u builduser makepkg -f --nodeps
+
+      - name: Create Micro-Repo database
+        run: |
+          mkdir -p dist
+          cp *.pkg.tar.zst dist/
+          cd dist
+          repo-add mimic.db.tar.zst *.pkg.tar.zst
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/*.pkg.tar.zst
+            dist/mimic.db.tar.zst
+            dist/mimic.files.tar.zst
+            target/release/mimic
+            target/release/mimic-brain
+          generate_release_notes: true

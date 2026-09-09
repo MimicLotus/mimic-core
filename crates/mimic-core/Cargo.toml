@@ -1,0 +1,30 @@
+[package]
+name = "mimic-core"
+version = "4.0.0"
+edition = "2021"
+authors = ["MimicOS Core Team <dev@mimicos.org>"]
+description = "The Unified Package Engine for Arch Linux (ALPM + AUR + bwrap)"
+
+[[bin]]
+name = "mimic"
+path = "src/main.rs"
+
+[dependencies]
+alpm = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+colored = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+indicatif = { workspace = true }
+tempfile = { workspace = true }
+which = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+zstd = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+libc = "0.2"

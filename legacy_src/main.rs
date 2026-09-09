@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 
 use graft::GraftEngine;
-use hunt::{DebHunter, GitHunter, Hunter, MirrorResolver, OrganScavenger};
+use hunt::{ArchHunter, DebHunter, GitHunter, Hunter, MirrorResolver, OrganScavenger};
 use state::{AbilityRecord, StateLedger};
 
 #[derive(Parser)]
@@ -170,6 +170,7 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
     // 1. Determine Prey Ingestion Vector
     let is_deb = target.ends_with(".deb") || target.starts_with("deb:") || explicit_source == Some("deb");
     let is_git = target.starts_with("git:") || target.contains("github.com") || target.ends_with(".git") || explicit_source == Some("git");
+    let is_arch = target.starts_with("arch:") || target.ends_with(".pkg.tar.zst") || target.ends_with(".pkg.tar.xz") || explicit_source == Some("arch");
 
     let forge_uuid = format!("forge_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
     let forge_dir = PathBuf::from(format!("/tmp/mimic-{}", forge_uuid));
@@ -182,7 +183,38 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
     let mut upstream_origin = target.to_string();
     let mut initial_deps = Vec::new();
 
-    if is_deb {
+    if is_arch {
+        source_type = "arch".to_string();
+        let arch_raw = target.trim_start_matches("arch:");
+        let local_path = Path::new(arch_raw);
+
+        let arch_path_to_extract: PathBuf;
+
+        if local_path.exists() && local_path.is_file() {
+            arch_path_to_extract = local_path.to_path_buf();
+        } else {
+            // Over-the-wire Arch mirror hunt
+            println!("{} Querying upstream Arch mirrors for '{}'...", "::".cyan().bold(), arch_raw.bold());
+            let hunter = ArchHunter::new();
+            let (remote_url, _ver) = hunter.resolve_arch_pkg(arch_raw).await?;
+            upstream_origin = remote_url.clone();
+            arch_path_to_extract = hunter.fetch_to_file(&remote_url, &forge_dir).await?;
+        }
+
+        println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
+        let info = ArchHunter::extract_arch_pkg(&arch_path_to_extract, &forge_dir)?;
+        pkg_name = info.name;
+        version = info.version;
+        raw_extract_dir = info.extracted_dir;
+        initial_deps = info.dependencies;
+
+        println!(
+            "  • Extracted: {} (v{}) [{}]",
+            pkg_name.bold().green(),
+            version.cyan(),
+            info.architecture.dimmed()
+        );
+    } else if is_deb {
         source_type = "deb".to_string();
         let deb_raw = target.trim_start_matches("deb:");
         let local_path = Path::new(deb_raw);
@@ -221,25 +253,55 @@ async fn consume_prey(target: &str, explicit_source: Option<&str>) -> Result<()>
         version = ver;
         raw_extract_dir = dest_dir;
     } else {
-        // Default fallback: Try over-the-wire Debian mirror hunt
-        source_type = "deb".to_string();
-        println!("{} Querying upstream mirrors for '{}'...", "::".cyan().bold(), target.bold());
-        let resolver = MirrorResolver::new();
-        let remote_url = resolver.resolve_deb(target).await?;
-        upstream_origin = remote_url.clone();
-        let downloaded = resolver.fetch_to_file(&remote_url, &forge_dir).await?;
+        // Multi-ecosystem default lookup: Try Arch first on Arch hosts, fallback to Debian
+        let arch_hunter = ArchHunter::new();
+        if let Ok((remote_url, _ver)) = arch_hunter.resolve_arch_pkg(target).await {
+            source_type = "arch".to_string();
+            println!("{} Querying upstream Arch mirrors for '{}'...", "::".cyan().bold(), target.bold());
+            upstream_origin = remote_url.clone();
+            let downloaded = arch_hunter.fetch_to_file(&remote_url, &forge_dir).await?;
 
-        println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
-        let info = DebHunter::extract_deb(&downloaded, &forge_dir)?;
-        pkg_name = info.name;
-        version = info.version;
-        raw_extract_dir = info.extracted_dir;
-        initial_deps = info.dependencies;
+            println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
+            let info = ArchHunter::extract_arch_pkg(&downloaded, &forge_dir)?;
+            pkg_name = info.name;
+            version = info.version;
+            raw_extract_dir = info.extracted_dir;
+            initial_deps = info.dependencies;
+
+            println!(
+                "  • Extracted: {} (v{}) [{}]",
+                pkg_name.bold().green(),
+                version.cyan(),
+                info.architecture.dimmed()
+            );
+        } else {
+            source_type = "deb".to_string();
+            println!("{} Querying upstream Debian mirrors for '{}'...", "::".cyan().bold(), target.bold());
+            let resolver = MirrorResolver::new();
+            let remote_url = resolver.resolve_deb(target).await?;
+            upstream_origin = remote_url.clone();
+            let downloaded = resolver.fetch_to_file(&remote_url, &forge_dir).await?;
+
+            println!("{} Phase 1: Unpacking prey payload into RAM forge...", "::".cyan().bold());
+            let info = DebHunter::extract_deb(&downloaded, &forge_dir)?;
+            pkg_name = info.name;
+            version = info.version;
+            raw_extract_dir = info.extracted_dir;
+            initial_deps = info.dependencies;
+
+            println!(
+                "  • Extracted: {} (v{}) [{}]",
+                pkg_name.bold().green(),
+                version.cyan(),
+                info.architecture.dimmed()
+            );
+        }
     }
 
     // 1.5. Autonomous Dependency & Organ Scavenging
     let _ = OrganScavenger::scavenge_dependencies(
         &pkg_name,
+        &source_type,
         &raw_extract_dir,
         &initial_deps,
         &forge_dir,
