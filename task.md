@@ -60,6 +60,48 @@
   - Enable `mimic-brain.socket` by default for zero-RAM on-demand triage.
   - Provide root configuration `/etc/mimic.conf` default profile.
 
-- [ ] **Automated GitHub Micro-Repo CI/CD**
-  - GitHub Actions workflow for automated AUR package building via `mimic build`.
-  - Auto-publish generated `.pkg.tar.zst` and updated `mimic.db.tar.zst` to GitHub Releases.
+- [x] **Automated GitHub Micro-Repo CI/CD**
+  - GitHub Actions workflow for automated release building via `.github/workflows/release.yml`.
+  - Auto-publishes generated `.pkg.tar.zst`, `mimic.db.tar.zst`, and standalone release binaries upon tag push.
+
+---
+
+## 🚀 Immediate Launch Sequence
+
+- [ ] **Step 1: Release Tag & Micro-Repo Generation (`v4.0.0`)**
+  - Create and push signed git release tag `v4.0.0` to `origin/main`.
+  - Verify GitHub Actions workflow completes cleanly:
+    * Compiles release binaries (`mimic`, `mimic-brain`).
+    * Packages `.pkg.tar.zst` and generates `mimic.db.tar.zst` / `mimic.files.tar.zst`.
+    * Creates GitHub Release with assets attached.
+
+- [ ] **Step 2: AUR Package Submission (`mimic-bin` / `mimic-git`)**
+  - Generate source manifest `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
+  - Push PKGBUILD to AUR repository for community installation via standard pacman / AUR helpers.
+
+- [ ] **Step 3: MimicOS Live ISO Integration**
+  - Update `archiso` packages list to include `bubblewrap`, `sccache`, `mold`, `git`, and `mimic`.
+  - Enable `mimic-brain.socket` in systemd presets.
+  - Test live ISO boot and verify zero-configuration sandbox package building.
+
+---
+
+## 🔮 Future Scope: mimic-brain v2
+
+Because `mimic-brain` is isolated behind a domain socket (`/run/mimic/brain.sock`) with systemd socket activation, it can grow sophisticated diagnostic capabilities without ever compromising system responsiveness or base RAM usage.
+
+- [ ] **Future: mimic-brain v2**
+  - **Autonomous Build Triage & Auto-Patching**:
+    * When a source build fails inside `bwrap`, `mimic-brain` inspects trailing stderr compiler logs.
+    * Maps missing headers/libraries (e.g., `<wayland-server.h>`) directly to their exact Arch package provider (`wayland`).
+    * Prompts interactively: *"Header missing. Install `wayland` to sandbox makedepends and retry? [Y/n]"*.
+  - **Interactive Dependency Conflict Resolver**:
+    * Detects file collisions, soname bumps, or circular dependency deadlocks before transactions commit.
+    * Provides human-readable rollback or substitution strategies instead of cryptic libalpm error codes.
+  - **Smart System Hygiene & Drift Analysis (`mimic audit`)**:
+    * Detects unmanaged or orphaned configuration files, dangling build caches, and stale `.pacnew` merges.
+    * Suggests safe pruning options and verifies package database integrity.
+  - **ArchWiki Offline Embeddings**:
+    * Bundles a lightweight, quantized vector index or targeted lookup table of common ArchWiki troubleshooting guides.
+    * Enables high-fidelity offline assistance during network outages or emergency recovery boots.
+
