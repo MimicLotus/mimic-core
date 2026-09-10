@@ -74,6 +74,40 @@ impl BubblewrapSandbox {
         let host_scratch_dir = self.config.build_dir.join(".tmp");
         let _ = std::fs::create_dir_all(&host_scratch_dir);
 
+        let host_shims_dir = host_scratch_dir.join("shims");
+        let _ = std::fs::create_dir_all(&host_shims_dir);
+
+        // Stage shims for bsdtar and tar to suppress ownership preservation errors (EINVAL) during archive extraction
+        let bsdtar_shim = host_shims_dir.join("bsdtar");
+        let _ = std::fs::write(&bsdtar_shim, "#!/bin/sh\nexec /usr/bin/bsdtar --no-same-owner \"$@\"\n");
+        let tar_shim = host_shims_dir.join("tar");
+        let _ = std::fs::write(&tar_shim, "#!/bin/sh\nexec /usr/bin/tar --no-same-owner \"$@\"\n");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&bsdtar_shim, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::set_permissions(&tar_shim, std::fs::Permissions::from_mode(0o755));
+        }
+
+        // makepkg shim to bypass EUID == 0 restriction inside fake-root user namespace
+        let host_makepkg = Path::new("/usr/bin/makepkg");
+        let mut makepkg_shim_path = None;
+        if host_makepkg.exists() {
+            if let Ok(content) = std::fs::read_to_string(host_makepkg) {
+                let patched = content.replace("(( EUID == 0 ))", "(( EUID == 99999 ))");
+                let makepkg_shim = host_shims_dir.join("makepkg");
+                if std::fs::write(&makepkg_shim, patched).is_ok() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&makepkg_shim, std::fs::Permissions::from_mode(0o755));
+                    }
+                    makepkg_shim_path = Some(makepkg_shim);
+                }
+            }
+        }
+
         let host_local_bin = dirs_local_bin();
 
         println!(
@@ -127,6 +161,11 @@ impl BubblewrapSandbox {
             "--tmpfs", "/run",
         ]);
 
+        // Bind patched makepkg shim over /usr/bin/makepkg if available
+        if let Some(ref shim) = makepkg_shim_path {
+            cmd.args(["--ro-bind", shim.to_str().unwrap(), "/usr/bin/makepkg"]);
+        }
+
         // NVMe-backed scratch directories for /tmp and /var/tmp (zero tmpfs RAM usage)
         cmd.args([
             "--bind", host_scratch_dir.to_str().unwrap(), "/tmp",
@@ -153,23 +192,23 @@ impl BubblewrapSandbox {
             cmd.args(["--bind", host_p.to_str().unwrap(), container_p]);
         }
 
-        // Security & User namespace isolation
+        // Security & User namespace isolation with fake-root mapping (uid 0 / gid 0)
         cmd.args([
             "--unshare-user",
             "--unshare-ipc",
             "--unshare-pid",
             "--unshare-uts",
-            "--uid", "1000",
-            "--gid", "1000",
+            "--uid", "0",
+            "--gid", "0",
             "--chdir", "/build",
             "--clearenv",
         ]);
 
         // Environment variables
-        cmd.args(["--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin"]);
+        cmd.args(["--setenv", "PATH", "/tmp/shims:/usr/local/bin:/usr/bin:/bin"]);
         cmd.args(["--setenv", "HOME", "/build"]);
-        cmd.args(["--setenv", "USER", "build"]);
-        cmd.args(["--setenv", "LOGNAME", "build"]);
+        cmd.args(["--setenv", "USER", "root"]);
+        cmd.args(["--setenv", "LOGNAME", "root"]);
         cmd.args(["--setenv", "LANG", "C.UTF-8"]);
         cmd.args(["--setenv", "LC_ALL", "C.UTF-8"]);
         cmd.args(["--setenv", "TMPDIR", "/tmp"]);

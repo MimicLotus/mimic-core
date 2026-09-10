@@ -153,8 +153,9 @@ enum Commands {
     },
     /// 🧠 Ask the dormant AI mentor why a package is needed or how it works
     Why {
-        /// Target package to inspect
-        package: String,
+        /// Package name or natural language query
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
     },
 }
 
@@ -405,16 +406,17 @@ async fn main() -> Result<()> {
                 engine.release_transaction();
             }
         }
-        Some(Commands::Why { package }) => {
-            println!("{} Consulting dormant advisor for '{}'...\n", "::".magenta().bold(), package.bold());
+        Some(Commands::Why { query }) => {
+            let query_str = query.join(" ");
+            println!("{} Consulting dormant advisor for '{}'...\n", "::".magenta().bold(), query_str.bold());
             let advisor = AdvisorClient::new();
-            match advisor.query_why(&package).await {
+            match advisor.query_why(&query_str).await {
                 Ok(Some(resp)) => {
                     advisor_ipc::print_advisor_response(&resp);
                 }
                 _ => {
                     println!("{} mimic-brain daemon is dormant (0 MB idle RAM).", "💤".blue());
-                    println!("  Run 'mimic-brain --why {}' for one-shot offline explanation,", package);
+                    println!("  Run 'mimic-brain --why \"{}\"' for one-shot offline explanation,", query_str);
                     println!("  or 'mimic-brain listen' to activate real-time socket triage.\n");
                 }
             }
@@ -690,5 +692,27 @@ mod tests {
         let cli = Cli::try_parse_from(["mimic"]).expect("Failed to parse bare mimic");
         assert!(!cli.upgrade);
         assert_eq!(cli.command, None);
+    }
+
+    #[test]
+    fn test_cli_parse_why_single_word() {
+        let cli = Cli::try_parse_from(["mimic", "why", "neovim"]).expect("Failed to parse why");
+        assert_eq!(cli.command, Some(Commands::Why { query: vec!["neovim".to_string()] }));
+    }
+
+    #[test]
+    fn test_cli_parse_why_multi_word() {
+        let cli = Cli::try_parse_from(["mimic", "why", "how", "does", "pipewire", "work"]).expect("Failed to parse multi-word why");
+        assert_eq!(
+            cli.command,
+            Some(Commands::Why {
+                query: vec![
+                    "how".to_string(),
+                    "does".to_string(),
+                    "pipewire".to_string(),
+                    "work".to_string()
+                ]
+            })
+        );
     }
 }

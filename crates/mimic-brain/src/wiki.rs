@@ -5,9 +5,20 @@ pub struct ArchWikiAdvisor;
 impl ArchWikiAdvisor {
     pub fn explain(package: &str) -> BrainResponse {
         let pkg_lower = package.to_lowercase();
+        let tokens: Vec<&str> = pkg_lower
+            .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .filter(|t| !t.is_empty())
+            .collect();
 
-        match pkg_lower.as_str() {
-            "pipewire" | "pipewire-pulse" | "pipewire-jack" => BrainResponse::Why {
+        let matches = |keywords: &[&str]| -> bool {
+            if keywords.iter().any(|k| *k == pkg_lower) {
+                return true;
+            }
+            tokens.iter().any(|tok| keywords.contains(tok))
+        };
+
+        if matches(&["pipewire", "pipewire-pulse", "pipewire-jack"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Next-Generation Multimedia Processing & Routing Subsystem".to_string(),
                 summary: "PipeWire handles low-latency audio and video processing, sandboxed application streaming (Flatpak/Wayland), and acts as a drop-in replacement for PulseAudio, JACK, and ALSA.".to_string(),
@@ -18,8 +29,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["pulseaudio".to_string(), "jack2".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/PipeWire".to_string()),
-            },
-            "hyprland" | "hyprland-git" => BrainResponse::Why {
+            }
+        } else if matches(&["hyprland", "hyprland-git"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Dynamic Tiling Wayland Compositor with Hardware Acceleration".to_string(),
                 summary: "Hyprland is a modern wlroots/aquamarine based dynamic tiling Wayland compositor written in C++, featuring fluid animations, dual-stack window tiling, and plugin support.".to_string(),
@@ -30,8 +42,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["sway".to_string(), "niri".to_string(), "river".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/Hyprland".to_string()),
-            },
-            "bwrap" | "bubblewrap" => BrainResponse::Why {
+            }
+        } else if matches(&["bwrap", "bubblewrap"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Unprivileged Sandboxing and Containerization Tool".to_string(),
                 summary: "Bubblewrap creates unprivileged sandboxes using Linux user namespaces. It is the underlying isolation technology used by Flatpak, devtools, and Mimic's hermetic build container.".to_string(),
@@ -42,8 +55,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["firejail".to_string(), "systemd-nspawn".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/Bubblewrap".to_string()),
-            },
-            "sccache" => BrainResponse::Why {
+            }
+        } else if matches(&["sccache"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Shared Compilation Cache for C, C++, and Rust".to_string(),
                 summary: "sccache is a ccache-like compiler cache developed by Mozilla, supporting local disk cache and cloud object stores (S3, GCS, Redis) for C/C++ and Rustc compilation.".to_string(),
@@ -54,8 +68,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["ccache".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/Ccache".to_string()),
-            },
-            "mold" => BrainResponse::Why {
+            }
+        } else if matches(&["mold"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "High-Performance Modern ELF Linker".to_string(),
                 summary: "mold is an ultra-fast alternative to GNU ld and LLVM lld, designed to prevent link-time bottlenecks on multi-core systems.".to_string(),
@@ -66,8 +81,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["lld".to_string(), "binutils".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/Mold".to_string()),
-            },
-            "ripgrep" => BrainResponse::Why {
+            }
+        } else if matches(&["ripgrep", "rg"]) {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Ultra-Fast Line-Oriented Regex Search Tool".to_string(),
                 summary: "ripgrep (rg) recursively searches directories for a regex pattern while respecting gitignore rules and skipping binary files by default.".to_string(),
@@ -77,8 +93,9 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec!["grep".to_string(), "the_silver_searcher".to_string(), "ack".to_string()],
                 archwiki_topic: Some("https://wiki.archlinux.org/title/Core_utilities#Search".to_string()),
-            },
-            _ => BrainResponse::Why {
+            }
+        } else {
+            BrainResponse::Why {
                 package: package.to_string(),
                 role: "Arch Linux / AUR Ecosystem Package".to_string(),
                 summary: format!(
@@ -91,7 +108,7 @@ impl ArchWikiAdvisor {
                 ],
                 alternatives: vec![],
                 archwiki_topic: Some(format!("https://wiki.archlinux.org/title/Special:Search?search={}", package)),
-            },
+            }
         }
     }
 }
