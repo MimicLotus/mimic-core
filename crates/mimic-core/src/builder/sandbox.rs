@@ -172,6 +172,33 @@ impl BubblewrapSandbox {
             "--bind", host_scratch_dir.to_str().unwrap(), "/var/tmp",
         ]);
 
+        // Stage hermetic container pacman.conf with SigLevel = Never and LocalFileSigLevel = Never
+        // to prevent remote sync database signature validation failures during makepkg package assembly
+        let host_pacman_conf = Path::new("/etc/pacman.conf");
+        let raw_pacman_conf = if host_pacman_conf.exists() {
+            std::fs::read_to_string(host_pacman_conf).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let gpg_dir = detect_gpg_dir(&raw_pacman_conf);
+        let sandbox_pacman_conf = generate_sandbox_pacman_conf(&raw_pacman_conf);
+        let sandbox_pacman_conf_path = host_scratch_dir.join("pacman.conf");
+        let _ = std::fs::write(&sandbox_pacman_conf_path, sandbox_pacman_conf);
+
+        // Mount container pacman configuration and keyrings
+        cmd.args([
+            "--ro-bind", sandbox_pacman_conf_path.to_str().unwrap(), "/etc/pacman.conf",
+            "--ro-bind-try", "/etc/pacman.d", "/etc/pacman.d",
+            "--ro-bind-try", "/etc/pacman.d/gnupg", "/etc/pacman.d/gnupg",
+            "--ro-bind-try", "/usr/share/pacman/keyrings", "/usr/share/pacman/keyrings",
+        ]);
+
+        if gpg_dir != Path::new("/etc/pacman.d/gnupg") && gpg_dir.exists() {
+            cmd.args([
+                "--ro-bind-try", gpg_dir.to_str().unwrap(), gpg_dir.to_str().unwrap(),
+            ]);
+        }
+
         // Toolchain mounts
         if host_local_bin.exists() {
             cmd.args([
@@ -286,5 +313,145 @@ fn dirs_local_bin() -> PathBuf {
         PathBuf::from(home).join(".local/bin")
     } else {
         PathBuf::from("/usr/local/bin")
+    }
+}
+
+/// Transforms a pacman.conf by setting SigLevel, LocalFileSigLevel, and RemoteFileSigLevel to Never.
+/// This prevents makepkg and pacman -Qi from failing during containerized package assembly
+/// when host repository database signatures are out-of-sync or unverified.
+pub fn generate_sandbox_pacman_conf(raw_conf: &str) -> String {
+    if raw_conf.trim().is_empty() {
+        return "[options]\nRootDir = /\nDBPath = /var/lib/pacman/\nCacheDir = /var/cache/pacman/pkg/\nGPGDir = /etc/pacman.d/gnupg/\nArchitecture = auto\nSigLevel = Never\nLocalFileSigLevel = Never\nRemoteFileSigLevel = Never\n".to_string();
+    }
+
+    let mut lines = Vec::new();
+    let mut has_siglevel = false;
+    let mut has_localfile_siglevel = false;
+
+    for line in raw_conf.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+
+        if !trimmed.starts_with('#') && lower.starts_with("siglevel") && lower.contains('=') {
+            lines.push("SigLevel = Never".to_string());
+            has_siglevel = true;
+        } else if (lower.starts_with("localfilesiglevel")
+            || lower.starts_with("#localfilesiglevel")
+            || lower.starts_with("# localfilesiglevel"))
+            && lower.contains('=')
+        {
+            lines.push("LocalFileSigLevel = Never".to_string());
+            has_localfile_siglevel = true;
+        } else if (lower.starts_with("remotefilesiglevel")
+            || lower.starts_with("#remotefilesiglevel")
+            || lower.starts_with("# remotefilesiglevel"))
+            && lower.contains('=')
+        {
+            lines.push("RemoteFileSigLevel = Never".to_string());
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if !has_siglevel || !has_localfile_siglevel {
+        let mut final_lines = Vec::new();
+        let mut inserted = false;
+        for line in lines {
+            let trimmed = line.trim();
+            final_lines.push(line.clone());
+            if !inserted && trimmed.eq_ignore_ascii_case("[options]") {
+                if !has_siglevel {
+                    final_lines.push("SigLevel = Never".to_string());
+                }
+                if !has_localfile_siglevel {
+                    final_lines.push("LocalFileSigLevel = Never".to_string());
+                }
+                inserted = true;
+            }
+        }
+        if !inserted {
+            final_lines.insert(
+                0,
+                format!(
+                    "[options]\n{}{}",
+                    if !has_siglevel { "SigLevel = Never\n" } else { "" },
+                    if !has_localfile_siglevel { "LocalFileSigLevel = Never\n" } else { "" }
+                ),
+            );
+        }
+        final_lines.join("\n")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Detects the GPG directory configured in pacman.conf, defaulting to `/etc/pacman.d/gnupg`.
+pub fn detect_gpg_dir(raw_conf: &str) -> PathBuf {
+    for line in raw_conf.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+        if parts.len() == 2 && parts[0].trim().eq_ignore_ascii_case("gpgdir") {
+            let val = parts[1].trim();
+            if !val.is_empty() {
+                return PathBuf::from(val);
+            }
+        }
+    }
+    PathBuf::from("/etc/pacman.d/gnupg")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_sandbox_pacman_conf_overrides_siglevels() {
+        let sample = r#"
+[options]
+RootDir = /
+DBPath = /var/lib/pacman/
+SigLevel = Required DatabaseOptional
+LocalFileSigLevel = Optional
+#RemoteFileSigLevel = Required
+
+[cachyos-extra-v3]
+Include = /etc/pacman.d/cachyos-v3-mirrorlist
+SigLevel = PackageRequired
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+"#;
+        let generated = generate_sandbox_pacman_conf(sample);
+        assert!(!generated.contains("Required DatabaseOptional"));
+        assert!(!generated.contains("PackageRequired"));
+        assert!(generated.contains("SigLevel = Never"));
+        assert!(generated.contains("LocalFileSigLevel = Never"));
+        assert!(generated.contains("RemoteFileSigLevel = Never"));
+    }
+
+    #[test]
+    fn test_generate_sandbox_pacman_conf_empty() {
+        let generated = generate_sandbox_pacman_conf("");
+        assert!(generated.contains("[options]"));
+        assert!(generated.contains("SigLevel = Never"));
+        assert!(generated.contains("LocalFileSigLevel = Never"));
+    }
+
+    #[test]
+    fn test_detect_gpg_dir() {
+        let sample_default = r#"
+[options]
+#GPGDir = /etc/pacman.d/gnupg/
+"#;
+        assert_eq!(detect_gpg_dir(sample_default), PathBuf::from("/etc/pacman.d/gnupg"));
+
+        let sample_custom = r#"
+[options]
+GPGDir = /custom/pacman/gpg
+"#;
+        assert_eq!(detect_gpg_dir(sample_custom), PathBuf::from("/custom/pacman/gpg"));
     }
 }

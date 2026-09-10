@@ -282,6 +282,11 @@ impl PacmanConfig {
                             config.cache_dirs = val.split_whitespace().map(PathBuf::from).collect();
                         }
                     }
+                    "gpgdir" => {
+                        if !val.is_empty() {
+                            config.gpg_dir = PathBuf::from(val);
+                        }
+                    }
                     "architecture" => {
                         if !val.is_empty() && val != "auto" {
                             config.architecture = val.to_string();
